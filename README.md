@@ -63,45 +63,53 @@ graph TD
 ```bash
 bash benchmarkCLI/setup-yolo-env.sh
 source benchmarkCLI/.venv/bin/activate
+
+# YOLOv8 nano (default, ~12 MB ONNX)
 python3 benchmarkCLI/download-yolo-model.py --model yolov8n
+
+# YOLOv8 medium (~100 MB ONNX)
+python3 benchmarkCLI/download-yolo-model.py --model yolov8m
+
+# Any variant: yolov8n/s/m/l/x, yolo11n/s/m/l/x
+python3 benchmarkCLI/download-yolo-model.py --model yolov8s --half
 ```
 
 ### 2a. Benchmark on desktop (Docker)
 
 ```bash
+# Default model (yolov8n)
 bash benchmarkCLI/run-benchmark.sh
-```
 
-Builds Docker images, runs GPU (TensorRT -> CUDA -> CPU fallback) then CPU benchmark, prints comparison.
+# Specify model
+bash benchmarkCLI/run-benchmark.sh --model yolov8m
 
-```bash
-# GPU only
-bash benchmarkCLI/run-benchmark.sh --gpu-only
+# GPU only with custom iterations
+bash benchmarkCLI/run-benchmark.sh --model yolov8m --gpu-only -n 500
 
 # CPU only
-bash benchmarkCLI/run-benchmark.sh --cpu-only
-
-# Custom model and iterations
-bash benchmarkCLI/run-benchmark.sh --model yolov8s -n 500 -b 4
+bash benchmarkCLI/run-benchmark.sh --model yolov8m --cpu-only
 
 # Skip rebuild on repeated runs
-bash benchmarkCLI/run-benchmark.sh --skip-build -n 1000
+bash benchmarkCLI/run-benchmark.sh --model yolov8m --skip-build -n 1000
 ```
 
 ### 2b. Benchmark on Jetson TX2 NX (native, no Docker)
 
 ```bash
 # Copy model to Jetson
-scp benchmarkCLI/models/yolov8n.onnx jetson:benchmarkCLI/models/
+scp benchmarkCLI/models/yolov8m.onnx jetson:benchmarkCLI/models/
 
 # On Jetson: validate environment
 bash benchmarkCLI/setup-jetson.sh
 
-# Run benchmark (auto-converts to TensorRT engine on first run)
-bash benchmarkCLI/run-benchmark-jetson.sh
+# trtexec with FP32/FP16/INT8 comparison
+bash benchmarkCLI/run-benchmark-jetson.sh --model yolov8m --trtexec-only -p fp32 fp16 int8 -n 100
 
-# trtexec only (no onnxruntime needed)
-bash benchmarkCLI/run-benchmark-jetson.sh --trtexec-only
+# TRT Python API (needs pycuda)
+bash benchmarkCLI/run-benchmark-jetson.sh --model yolov8m --trt-python -p fp16 int8 -n 100
+
+# Default (auto-detect method, yolov8n)
+bash benchmarkCLI/run-benchmark-jetson.sh
 ```
 
 `run-benchmark.sh` auto-detects Jetson and redirects to the native runner.
@@ -147,10 +155,12 @@ bash benchmarkCLI/run-benchmark-jetson.sh --trtexec-only
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--trtexec-only` | off | trtexec benchmark only |
-| `--ort-only` | off | onnxruntime benchmark only |
-| `--convert` | off | Force ONNX to TensorRT conversion |
-| `--model NAME` | `yolov8n` | YOLO model name |
+| `--trtexec-only` | off | trtexec CLI benchmark |
+| `--trt-python` | off | TRT Python API benchmark (needs pycuda) |
+| `--ort-only` | off | onnxruntime benchmark |
+| `--all` | off | Run all available methods |
+| `-p PREC [PREC...]` | `fp16` | Precision(s): `fp32`, `fp16`, `int8` |
+| `--model NAME` | `yolov8n` | YOLO model name (yolov8n/s/m/l/x) |
 | `-n NUM` | `100` | Benchmark iterations |
 | `-w NUM` | `10` | Warmup iterations |
 | `-b NUM` | `1` | Batch size |
