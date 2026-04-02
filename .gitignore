@@ -14,5 +14,6 @@ benchmarkCLI/models/*-convert.log
 __pycache__/
 *.pyc
 
-# Allow gitignore itself
+# Allow root files
 !.gitignore
+!README.md
