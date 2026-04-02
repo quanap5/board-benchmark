@@ -23,6 +23,7 @@ cuda = import_module("cuda-utils")
 builder_mod = import_module("trt-engine-builder")
 log = import_module("log-utils")
 build_engine = builder_mod.build_engine
+load_engine = builder_mod.load_engine
 save_engine = builder_mod.save_engine
 
 
@@ -148,15 +149,26 @@ def main():
     log.info("Using ctypes CUDA bindings (no pycuda)")
 
     all_results = []
+    base_name = os.path.splitext(args.model)[0]
+
     for prec in args.precision:
-        log.step("Building {} engine...".format(prec.upper()))
-        engine = build_engine(args.model, prec, args.workspace)
+        cached = "{}-{}.engine".format(base_name, prec)
+        engine = None
+
+        # Check cached engine first
+        if os.path.isfile(cached):
+            log.ok("Loading cached engine: {}".format(cached))
+            engine = load_engine(cached)
+        else:
+            log.step("Building {} engine (no cache found)...".format(prec.upper()))
+            engine = build_engine(args.model, prec, args.workspace)
+            if engine and args.save_engine:
+                save_engine(engine, cached)
+
         if not engine:
-            log.warn("Skipping {} (build failed)".format(prec.upper()))
+            log.warn("Skipping {} (build/load failed)".format(prec.upper()))
             continue
-        if args.save_engine:
-            base = os.path.splitext(args.model)[0]
-            save_engine(engine, "{}-{}.engine".format(base, prec))
+
         latencies = run_benchmark(engine, args.warmup, args.iterations)
         stats = compute_stats(latencies)
         print_results(stats, prec.upper(), args.model, args.iterations)
