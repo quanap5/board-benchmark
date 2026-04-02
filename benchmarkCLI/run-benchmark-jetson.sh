@@ -57,7 +57,7 @@ ENGINE_FILE="$MODELS_DIR/$MODEL_NAME.engine"
 HAS_TRT_PYTHON=false
 HAS_TRTEXEC=false
 HAS_ORT=false
-python3 -c "import tensorrt; import pycuda.driver" 2>/dev/null && HAS_TRT_PYTHON=true
+python3 -c "import tensorrt" 2>/dev/null && HAS_TRT_PYTHON=true
 [ -x /usr/src/tensorrt/bin/trtexec ] || [ -x /usr/bin/trtexec ] && HAS_TRTEXEC=true
 python3 -c "import onnxruntime" 2>/dev/null && HAS_ORT=true
 
@@ -69,7 +69,7 @@ if [ "$MODE" = "auto" ]; then
     elif [ "$HAS_ORT" = true ]; then
         MODE="ort"
     else
-        echo "[ERROR] No benchmark backend found. Need tensorrt+pycuda, trtexec, or onnxruntime."
+        echo "[ERROR] No benchmark backend found. Need tensorrt, trtexec, or onnxruntime."
         exit 1
     fi
 fi
@@ -120,8 +120,8 @@ if [ "$MODE" = "trt-python" ] || [ "$MODE" = "all" ]; then
             "$ONNX_FILE" $PREC_ARGS -n "$ITERATIONS" -w "$WARMUP" --save-engine
         echo ""
     else
-        _warn "tensorrt/pycuda not available. Skipping TRT Python benchmark."
-        _info "Install: pip3 install --user pycuda"
+        _warn "tensorrt not available. Skipping TRT Python benchmark."
+        _info "Check JetPack installation: dpkg -l | grep tensorrt"
     fi
 fi
 

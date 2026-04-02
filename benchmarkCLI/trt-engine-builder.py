@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build TensorRT engine from ONNX with FP32/FP16/INT8 precision.
 
-Uses tensorrt + pycuda (pre-installed in JetPack 4.6.x).
+Uses tensorrt + ctypes CUDA bindings. No pycuda needed.
 """
 
 import os
@@ -11,11 +11,13 @@ import numpy as np
 
 try:
     import tensorrt as trt
-    import pycuda.driver as cuda
-    import pycuda.autoinit  # noqa: F401
-except ImportError as e:
-    print("[ERROR] Missing: {}".format(e))
+except ImportError:
+    print("[ERROR] tensorrt not found. Is JetPack installed?")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from importlib import import_module
+cuda = import_module("cuda-utils")
 
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
@@ -29,7 +31,7 @@ class DummyCalibrator(trt.IInt8EntropyCalibrator2):
         self.shape = [d if d > 0 else 1 for d in inp.shape]
         self.num_batches = num_batches
         self.batch_idx = 0
-        self.device_input = cuda.mem_alloc(int(np.prod(self.shape) * 4))
+        self.device_input = cuda.DeviceBuffer(int(np.prod(self.shape) * 4))
 
     def get_batch_size(self):
         return self.shape[0]
@@ -38,7 +40,7 @@ class DummyCalibrator(trt.IInt8EntropyCalibrator2):
         if self.batch_idx >= self.num_batches:
             return None
         data = np.random.randn(*self.shape).astype(np.float32)
-        cuda.memcpy_htod(self.device_input, data.tobytes())
+        cuda.memcpy_htod(self.device_input, data)
         self.batch_idx += 1
         return [int(self.device_input)]
 
