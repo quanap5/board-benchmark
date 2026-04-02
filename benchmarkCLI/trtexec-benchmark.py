@@ -120,34 +120,24 @@ def print_results(stats, precision, model_path):
 
 def print_comparison(all_results):
     """Print side-by-side precision comparison table."""
-    print("\n" + "=" * 60)
-    print("  TRTEXEC PRECISION COMPARISON")
-    print("=" * 60)
-    header = "  {:<16}".format("Metric")
+    print("\n" + "=" * 60 + "\n  TRTEXEC PRECISION COMPARISON\n" + "=" * 60)
+    hdr = "  {:<16}".format("Metric")
     for prec, _ in all_results:
-        header += " {:>12}".format(prec)
-    print(header)
-    print("  " + "-" * (16 + 13 * len(all_results)))
-
-    for label, key, unit in [
-        ("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
-        ("Median", "median_ms", "ms"), ("P99", "p99_ms", "ms"), ("FPS", "fps", ""),
-    ]:
+        hdr += " {:>12}".format(prec)
+    print(hdr + "\n  " + "-" * (16 + 13 * len(all_results)))
+    for label, key, unit in [("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
+                              ("Median", "median_ms", "ms"), ("P99", "p99_ms", "ms"), ("FPS", "fps", "")]:
         row = "  {:<16}".format(label)
-        for _, stats in all_results:
-            val = stats.get(key, "N/A")
-            sfx = " {}".format(unit) if unit and val != "N/A" else ""
-            row += " {:>12}".format("{}{}".format(val, sfx))
+        for _, s in all_results:
+            v = s.get(key, "N/A")
+            row += " {:>12}".format("{}{}".format(v, " " + unit if unit and v != "N/A" else ""))
         print(row)
-
-    # Speedup vs first precision
     base_prec, base = all_results[0]
     if len(all_results) > 1 and "avg_ms" in base:
         print("")
-        for prec, stats in all_results[1:]:
-            if "avg_ms" in stats and stats["avg_ms"] > 0:
-                sp = round(base["avg_ms"] / stats["avg_ms"], 2)
-                print("  {} vs {} speedup: {}x".format(prec, base_prec, sp))
+        for prec, s in all_results[1:]:
+            if "avg_ms" in s and s["avg_ms"] > 0:
+                print("  {} vs {} speedup: {}x".format(prec, base_prec, round(base["avg_ms"] / s["avg_ms"], 2)))
     print("=" * 60)
 
 
@@ -175,14 +165,22 @@ def main():
     print("  Iterations: {}  Warmup: {}".format(args.iterations, args.warmup))
 
     all_results = []
+    base_name = os.path.splitext(args.model)[0]
+
     for prec in args.precision:
         print("\n--- {} ---".format(prec.upper()))
-        engine_path = None
-        if args.save_engine and not args.model.endswith(".engine"):
-            base = os.path.splitext(args.model)[0]
-            engine_path = "{}-{}.engine".format(base, prec)
 
-        output = run_trtexec(args.model, prec, args.iterations, args.warmup, engine_path)
+        # Check for cached engine first
+        cached = "{}-{}.engine".format(base_name, prec)
+        if os.path.isfile(cached):
+            print("[INFO] Using cached engine: {}".format(cached))
+            model_input = cached
+            save_path = None
+        else:
+            model_input = args.model
+            save_path = cached if args.save_engine else None
+
+        output = run_trtexec(model_input, prec, args.iterations, args.warmup, save_path)
         stats = parse_output(output)
         if stats:
             print_results(stats, prec, args.model)
