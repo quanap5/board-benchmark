@@ -41,7 +41,7 @@ def run_trtexec(model_path, iterations, warmup, fp16):
     print(f"[INFO] Running: {' '.join(cmd)}")
     print("")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     output = result.stdout + result.stderr
     return output
 

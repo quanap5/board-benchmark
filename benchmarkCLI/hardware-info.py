@@ -54,7 +54,7 @@ def get_disk_info():
         result = subprocess.run(
             ["df", "-h", "--type=ext4", "--type=vfat", "--type=ntfs",
              "--type=fuseblk", "--type=xfs", "--type=btrfs"],
-            capture_output=True, text=True
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True
         )
         for line in result.stdout.strip().split("\n")[1:]:
             parts = line.split()
@@ -79,7 +79,7 @@ def get_gpu_info():
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
              "--format=csv,noheader"],
-            capture_output=True, text=True
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True
         )
         if result.returncode == 0:
             for line in result.stdout.strip().split("\n"):
@@ -96,7 +96,7 @@ def get_gpu_info():
 
     try:
         result = subprocess.run(
-            ["lspci"], capture_output=True, text=True
+            ["lspci"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True
         )
         for line in result.stdout.split("\n"):
             if "VGA" in line or "3D controller" in line:
