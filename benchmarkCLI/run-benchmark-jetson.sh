@@ -105,7 +105,10 @@ parse_ort_csv() {
     [ -z "$1" ] && return
     IFS=',' read -r ORT_PROVIDER _ _ _ ORT_AVG ORT_MIN ORT_MAX ORT_MEDIAN ORT_P95 ORT_P99 _ ORT_FPS _ <<< "${1#CSV:}"
 }
-print_col() { printf "  %-20s %13s ms\n" "$1" "$2"; }
+print_col() {
+    [ -z "$2" ] && return  # skip empty values
+    printf "  %-20s %13s ms\n" "$1" "$2"
+}
 
 parse_trtexec_csv "$TRTEXEC_CSV"
 parse_ort_csv "$ORT_CSV"
@@ -125,7 +128,8 @@ if [ -n "$TRTEXEC_CSV" ] && [ -n "$ORT_CSV" ]; then
     for m in "Avg latency:TRT_AVG:ORT_AVG" "Min latency:TRT_MIN:ORT_MIN" "Max latency:TRT_MAX:ORT_MAX" \
              "Median latency:TRT_MEDIAN:ORT_MEDIAN" "P95 latency:TRT_P95:ORT_P95" "P99 latency:TRT_P99:ORT_P99"; do
         IFS=':' read -r label v1 v2 <<< "$m"
-        printf "  %-20s %13s ms %16s ms\n" "$label" "${!v1}" "${!v2}"
+        [ -z "${!v1}" ] && [ -z "${!v2}" ] && continue
+        printf "  %-20s %13s ms %16s ms\n" "$label" "${!v1:-N/A}" "${!v2:-N/A}"
     done
     printf "  %-20s %15s %18s\n" "FPS" "$TRT_FPS" "$ORT_FPS"
 elif [ -n "$TRTEXEC_CSV" ]; then

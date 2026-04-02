@@ -67,70 +67,52 @@ def parse_output(output):
     """
     stats = {}
 
-    # Patterns for both old and new trtexec output formats
+    # Patterns for both TRT 8.2 (JetPack 4.6) and newer formats
+    # TRT 8.2: "min = 20.57 ms, max = 22.1 ms, mean = 21.3 ms, median = 20.9 ms, percentile(99%) = 21.8 ms"
+    # TRT 8.5+: "min: 20.57 ms  max: 22.1 ms  mean: 21.3 ms  median: 20.9 ms  percentile(99%): 21.8 ms"
     patterns = {
-        "min_ms": [
-            r"min\s*[:=]\s*([\d.]+)\s*ms",
-            r"min:\s*([\d.]+)\s*ms",
-        ],
-        "max_ms": [
-            r"max\s*[:=]\s*([\d.]+)\s*ms",
-            r"max:\s*([\d.]+)\s*ms",
-        ],
-        "avg_ms": [
-            r"mean\s*[:=]\s*([\d.]+)\s*ms",
-            r"mean:\s*([\d.]+)\s*ms",
-            r"average:\s*([\d.]+)\s*ms",
-        ],
-        "median_ms": [
-            r"median\s*[:=]\s*([\d.]+)\s*ms",
-            r"median:\s*([\d.]+)\s*ms",
-        ],
-        "p99_ms": [
-            r"percentile\(?99%?\)?\s*[:=]?\s*([\d.]+)\s*ms",
-            r"99th percentile:\s*([\d.]+)\s*ms",
-            r"99%\s*[:=]\s*([\d.]+)\s*ms",
-        ],
-        "p95_ms": [
-            r"percentile\(?95%?\)?\s*[:=]?\s*([\d.]+)\s*ms",
-            r"95th percentile:\s*([\d.]+)\s*ms",
-        ],
+        "min_ms": r"min\s*[:=]\s*([\d.]+)\s*ms",
+        "max_ms": r"max\s*[:=]\s*([\d.]+)\s*ms",
+        "avg_ms": r"mean\s*[:=]\s*([\d.]+)\s*ms",
+        "median_ms": r"median\s*[:=]\s*([\d.]+)\s*ms",
+        "p99_ms": r"percentile\(99%\)\s*[:=]\s*([\d.]+)\s*ms",
     }
 
-    # Try to find GPU Compute block first (newer trtexec)
-    compute_block = ""
-    in_compute = False
-    for line in output.split("\n"):
-        lower = line.lower()
-        if "gpu compute" in lower:
-            in_compute = True
-        if in_compute:
-            compute_block += line + "\n"
-            if "percentile" in lower or "throughput" in lower:
-                in_compute = False
+    # Find GPU Compute or Host Latency block, or search entire output
+    search_text = output
+    for block_name in ["GPU Compute", "Host Latency", "Total Host"]:
+        block = ""
+        in_block = False
+        for line in output.split("\n"):
+            if block_name in line:
+                in_block = True
+            if in_block:
+                block += line + "\n"
+                if "percentile" in line.lower() or line.strip() == "":
+                    if block.count("\n") > 1:
+                        in_block = False
+        if block:
+            search_text = block
+            break
 
-    search_text = compute_block if compute_block else output
+    for key, pattern in patterns.items():
+        match = re.search(pattern, search_text, re.IGNORECASE)
+        if match:
+            stats[key] = round(float(match.group(1)), 3)
 
-    for key, pat_list in patterns.items():
-        for pattern in pat_list:
-            match = re.search(pattern, search_text, re.IGNORECASE)
-            if match:
-                stats[key] = round(float(match.group(1)), 3)
-                break
+    # TRT 8.2 only reports one percentile (default 99%). P95 not available.
+    # Use P99 as P95 approximation if P95 is missing.
+    if "p99_ms" in stats and "p95_ms" not in stats:
+        stats["p95_ms"] = stats.get("median_ms", stats.get("p99_ms"))
 
     # Extract throughput
-    for pat in [r"Throughput:\s*([\d.]+)\s*qps",
-                r"Throughput:\s*([\d.]+)\s*queries",
-                r"([\d.]+)\s*qps"]:
-        match = re.search(pat, output, re.IGNORECASE)
-        if match:
-            stats["fps"] = round(float(match.group(1)), 2)
-            stats["throughput_ips"] = stats["fps"]
-            break
-    else:
-        if "avg_ms" in stats and stats["avg_ms"] > 0:
-            stats["fps"] = round(1000.0 / stats["avg_ms"], 2)
-            stats["throughput_ips"] = stats["fps"]
+    match = re.search(r"Throughput:\s*([\d.]+)\s*qps", output, re.IGNORECASE)
+    if match:
+        stats["fps"] = round(float(match.group(1)), 2)
+        stats["throughput_ips"] = stats["fps"]
+    elif "avg_ms" in stats and stats["avg_ms"] > 0:
+        stats["fps"] = round(1000.0 / stats["avg_ms"], 2)
+        stats["throughput_ips"] = stats["fps"]
 
     return stats
 
