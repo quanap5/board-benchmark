@@ -21,15 +21,39 @@ The project separates model preparation from inference benchmarking:
 - **Desktop runtime** (Docker) -- benchmarks `.onnx` with `onnxruntime` in minimal containers
 - **Jetson runtime** (native) -- benchmarks on-device with `trtexec` and optional `onnxruntime`, no Docker
 
-```
- DEV (local)                 DESKTOP (Docker)            JETSON (native)
-+--------------------+      +---------------------+     +---------------------+
-| ultralytics        |      | onnxruntime + numpy |     | JetPack TensorRT    |
-| .pt -> .onnx       |      | NO ultralytics      |     | trtexec (built-in)  |
-+---------+----------+      +----------+----------+     +----------+----------+
-          |                            |                            |
-          v                            v                            v
-    models/yolov8n.onnx -----> mount (read-only)           scp to device
+```mermaid
+graph TD
+    subgraph DEV["Dev Mode (local machine)"]
+        A1[setup-yolo-env.sh] --> A2[download-yolo-model.py]
+        A2 --> A3["ultralytics\n.pt -> .onnx"]
+        A3 --> MODEL["models/yolov8n.onnx"]
+    end
+
+    subgraph DESKTOP["Desktop Runtime (Docker)"]
+        D1["benchmark-cpu\npython:3.12-slim\nonnxruntime + numpy"]
+        D2["benchmark-gpu\nnvcr.io/nvidia/tensorrt\nonnxruntime-gpu + numpy"]
+    end
+
+    subgraph JETSON["Jetson Runtime (native, no Docker)"]
+        J1["trtexec\nJetPack built-in"]
+        J2["onnxruntime\nbuild from source"]
+        J1 --> J3[".engine\nTensorRT optimized"]
+    end
+
+    MODEL -- "docker mount\n(read-only)" --> D1
+    MODEL -- "docker mount\n(read-only)" --> D2
+    MODEL -- "scp to device" --> J1
+    MODEL -- "scp to device" --> J2
+
+    D1 --> R1["CPU Benchmark"]
+    D2 --> R2["GPU Benchmark\nTensorRT -> CUDA -> CPU"]
+    J1 --> R3["TensorRT Benchmark\nFP16"]
+    J2 --> R4["ORT Benchmark\nTensorRT EP"]
+
+    style DEV fill:#2d333b,stroke:#76B900,color:#e6edf3
+    style DESKTOP fill:#2d333b,stroke:#2496ED,color:#e6edf3
+    style JETSON fill:#2d333b,stroke:#76B900,color:#e6edf3
+    style MODEL fill:#005CED,stroke:#005CED,color:#fff
 ```
 
 ## Quick Start
@@ -152,6 +176,19 @@ GPU image requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter
 
 ## Execution Provider Fallback
 
+```mermaid
+graph LR
+    AUTO["--provider auto\n(default)"] --> TRT{TensorRT EP\navailable?}
+    TRT -- Yes --> TRT_RUN["TensorRT EP"]
+    TRT -- No --> CUDA{CUDA EP\navailable?}
+    CUDA -- Yes --> CUDA_RUN["CUDA EP"]
+    CUDA -- No --> CPU_RUN["CPU EP"]
+
+    style TRT_RUN fill:#76B900,stroke:#76B900,color:#fff
+    style CUDA_RUN fill:#2496ED,stroke:#2496ED,color:#fff
+    style CPU_RUN fill:#6c757d,stroke:#6c757d,color:#fff
+```
+
 | `--provider` | EP chain |
 |--------------|----------|
 | `auto` (default) | TensorRT -> CUDA -> CPU |
@@ -171,23 +208,39 @@ Unavailable providers are silently skipped. Active EP is reported in output.
 
 ## File Structure
 
-```
-benchmarkCLI/
-+-- Dockerfile                  # CPU runtime image
-+-- Dockerfile.gpu              # GPU runtime image (TensorRT base)
-+-- requirements.txt            # CPU runtime: numpy, onnxruntime
-+-- requirements-gpu.txt        # GPU runtime: numpy, onnxruntime-gpu
-+-- requirements-dev.txt        # Dev: adds ultralytics, onnx
-+-- setup-yolo-env.sh           # Dev: create venv
-+-- download-yolo-model.py      # Dev: download .pt, export .onnx
-+-- setup-jetson.sh             # Jetson: validate JetPack environment
-+-- convert-to-tensorrt.sh      # Jetson: ONNX -> TensorRT .engine
-+-- onnx-benchmark.py           # Benchmark via onnxruntime (all platforms)
-+-- trtexec-benchmark.py        # Benchmark via trtexec (Jetson)
-+-- hardware-info.py            # System hardware report
-+-- run-benchmark.sh            # Desktop: Docker build + benchmark
-+-- run-benchmark-jetson.sh     # Jetson: native benchmark
-+-- models/                     # Model files (git-ignored)
+```mermaid
+graph LR
+    subgraph dev["Dev Scripts"]
+        S1[setup-yolo-env.sh]
+        S2[download-yolo-model.py]
+        S3[requirements-dev.txt]
+    end
+
+    subgraph desktop["Desktop Runtime"]
+        D1[Dockerfile]
+        D2[Dockerfile.gpu]
+        D3[requirements.txt]
+        D4[requirements-gpu.txt]
+        D5[run-benchmark.sh]
+    end
+
+    subgraph jetson["Jetson Runtime"]
+        J1[setup-jetson.sh]
+        J2[convert-to-tensorrt.sh]
+        J3[run-benchmark-jetson.sh]
+        J4[trtexec-benchmark.py]
+    end
+
+    subgraph shared["Shared"]
+        C1[onnx-benchmark.py]
+        C2[hardware-info.py]
+        C3["models/\n(git-ignored)"]
+    end
+
+    style dev fill:#2d333b,stroke:#76B900,color:#e6edf3
+    style desktop fill:#2d333b,stroke:#2496ED,color:#e6edf3
+    style jetson fill:#2d333b,stroke:#f0883e,color:#e6edf3
+    style shared fill:#2d333b,stroke:#8b949e,color:#e6edf3
 ```
 
 ## Output Metrics
