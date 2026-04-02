@@ -5,6 +5,8 @@
 #   bash benchmarkCLI/run-benchmark-jetson.sh --model yolov8s -n 500
 #   bash benchmarkCLI/run-benchmark-jetson.sh --trtexec-only
 #   bash benchmarkCLI/run-benchmark-jetson.sh --ort-only
+#   bash benchmarkCLI/run-benchmark-jetson.sh --trt-python              # FP32+FP16+INT8
+#   bash benchmarkCLI/run-benchmark-jetson.sh --trt-python -p fp16 int8 # specific precisions
 
 set -e
 
@@ -12,7 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="$SCRIPT_DIR/models"
 
 MODEL_NAME="yolov8n"; ITERATIONS=100; WARMUP=10; BATCH_SIZE=1
-RUN_TRTEXEC=true; RUN_ORT=true; CONVERT_FIRST=false
+RUN_TRTEXEC=true; RUN_ORT=true; RUN_TRT_PYTHON=false; CONVERT_FIRST=false
+TRT_PYTHON_PRECISIONS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -20,8 +23,12 @@ while [[ $# -gt 0 ]]; do
         -n)              ITERATIONS="$2"; shift 2 ;;
         -w)              WARMUP="$2"; shift 2 ;;
         -b)              BATCH_SIZE="$2"; shift 2 ;;
-        --trtexec-only)  RUN_ORT=false; shift ;;
-        --ort-only)      RUN_TRTEXEC=false; shift ;;
+        --trtexec-only)  RUN_ORT=false; RUN_TRT_PYTHON=false; shift ;;
+        --ort-only)      RUN_TRTEXEC=false; RUN_TRT_PYTHON=false; shift ;;
+        --trt-python)    RUN_TRT_PYTHON=true; RUN_TRTEXEC=false; RUN_ORT=false; shift ;;
+        -p)              shift; while [[ $# -gt 0 ]] && [[ ! "$1" == --* ]]; do
+                             TRT_PYTHON_PRECISIONS="$TRT_PYTHON_PRECISIONS $1"; shift
+                         done ;;
         --convert)       CONVERT_FIRST=true; shift ;;
         *)               echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -92,6 +99,25 @@ if [ "$RUN_ORT" = true ]; then
     else
         echo "[WARN] onnxruntime not installed. Skipping. Use --trtexec-only or setup-jetson.sh"
         RUN_ORT=false
+    fi
+fi
+
+# --- TRT Python benchmark (FP32/FP16/INT8) ---
+if [ "$RUN_TRT_PYTHON" = true ]; then
+    if python3 -c "import tensorrt; import pycuda.driver" 2>/dev/null; then
+        echo "========================================================"
+        echo "  TRT PYTHON BENCHMARK (FP32/FP16/INT8)"
+        echo "========================================================"
+        PREC_ARGS=""
+        if [ -n "$TRT_PYTHON_PRECISIONS" ]; then
+            PREC_ARGS="-p $TRT_PYTHON_PRECISIONS"
+        fi
+        python3 "$SCRIPT_DIR/trt-python-benchmark.py" \
+            "$ONNX_FILE" $PREC_ARGS -n "$ITERATIONS" -w "$WARMUP" --save-engine
+        echo ""
+    else
+        echo "[WARN] tensorrt/pycuda not available. Cannot run TRT Python benchmark."
+        echo "       These should be pre-installed with JetPack."
     fi
 fi
 
