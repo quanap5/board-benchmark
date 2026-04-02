@@ -11,6 +11,10 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from importlib import import_module
+log = import_module("log-utils")
+
 
 def find_trtexec():
     """Find trtexec binary on the system."""
@@ -28,7 +32,7 @@ def run_trtexec(model_path, precision, iterations, warmup, save_engine=None):
     """Run trtexec and stream output in real-time."""
     trtexec = find_trtexec()
     if not trtexec:
-        print("[ERROR] trtexec not found.")
+        log.error("trtexec not found.")
         return ""
 
     cmd = [trtexec, "--iterations={}".format(iterations),
@@ -47,7 +51,7 @@ def run_trtexec(model_path, precision, iterations, warmup, save_engine=None):
     if save_engine:
         cmd.append("--saveEngine={}".format(save_engine))
 
-    print("[INFO] Running [{}]: {}".format(precision.upper(), " ".join(cmd)))
+    log.info("Running [{}]: {}".format(precision.upper(), " ".join(cmd)))
     print("")
 
     captured = []
@@ -72,7 +76,6 @@ def parse_output(output):
         "p99_ms": r"percentile\(99%\)\s*[:=]\s*([\d.]+)\s*ms",
     }
 
-    # Find timing block
     search_text = output
     for block_name in ["GPU Compute", "Host Latency", "Total Host"]:
         block, in_block = "", False
@@ -103,80 +106,69 @@ def parse_output(output):
 
 def print_results(stats, precision, model_path):
     """Print single precision results."""
-    print("\n" + "=" * 50)
-    print("  TRTEXEC RESULTS [{}]".format(precision.upper()))
-    print("=" * 50)
-    print("  Model:             {}".format(model_path))
+    log.header("TRTEXEC RESULTS [{}]".format(precision.upper()))
+    log.metric("Model", model_path)
     for label, key, unit in [
         ("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
         ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
         ("P99 latency", "p99_ms", "ms"), ("FPS", "fps", ""),
     ]:
-        val = stats.get(key, "N/A")
-        sfx = " {}".format(unit) if unit and val != "N/A" else ""
-        print("  {:<20} {}{}".format(label, val, sfx))
-    print("=" * 50)
+        log.metric(label, stats.get(key, "N/A"), unit)
 
 
 def print_comparison(all_results):
     """Print side-by-side precision comparison table."""
-    print("\n" + "=" * 60 + "\n  TRTEXEC PRECISION COMPARISON\n" + "=" * 60)
+    log.header("TRTEXEC PRECISION COMPARISON")
     hdr = "  {:<16}".format("Metric")
     for prec, _ in all_results:
-        hdr += " {:>12}".format(prec)
-    print(hdr + "\n  " + "-" * (16 + 13 * len(all_results)))
+        hdr += " {:>14}".format(log.c(prec, log.BOLD + log.CYAN))
+    print(hdr)
+    log.divider()
     for label, key, unit in [("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
                               ("Median", "median_ms", "ms"), ("P99", "p99_ms", "ms"), ("FPS", "fps", "")]:
         row = "  {:<16}".format(label)
         for _, s in all_results:
             v = s.get(key, "N/A")
-            row += " {:>12}".format("{}{}".format(v, " " + unit if unit and v != "N/A" else ""))
+            val = "{}{}".format(v, " " + unit if unit and v != "N/A" else "")
+            row += " {:>14}".format(val)
         print(row)
     base_prec, base = all_results[0]
     if len(all_results) > 1 and "avg_ms" in base:
         print("")
         for prec, s in all_results[1:]:
             if "avg_ms" in s and s["avg_ms"] > 0:
-                print("  {} vs {} speedup: {}x".format(prec, base_prec, round(base["avg_ms"] / s["avg_ms"], 2)))
-    print("=" * 60)
-
-
-def print_csv(precision, stats):
-    """Print CSV line."""
-    keys = ["avg_ms", "min_ms", "max_ms", "median_ms", "p99_ms", "fps"]
-    print("CSV:{},{}".format(precision, ",".join(str(stats.get(k, "")) for k in keys)))
+                sp = round(base["avg_ms"] / s["avg_ms"], 2)
+                log.speed("{} vs {} speedup: {}x".format(prec, base_prec, sp))
 
 
 def main():
     p = argparse.ArgumentParser(description="trtexec benchmark (FP32/FP16/INT8)")
     p.add_argument("model", help="Path to ONNX model or .engine file")
     p.add_argument("-p", "--precision", nargs="+", default=["fp16"],
-                   choices=["fp32", "fp16", "int8"],
-                   help="Precision(s) to benchmark (default: fp16)")
+                   choices=["fp32", "fp16", "int8"])
     p.add_argument("-n", "--iterations", type=int, default=100)
     p.add_argument("-w", "--warmup", type=int, default=10)
-    p.add_argument("--save-engine", action="store_true", help="Save .engine files")
+    p.add_argument("--save-engine", action="store_true")
     p.add_argument("--csv", action="store_true", default=False)
     args = p.parse_args()
 
-    print("\n  TRTEXEC BENCHMARK")
-    print("  Model:      {}".format(args.model))
-    print("  Precisions: {}".format(", ".join(pr.upper() for pr in args.precision)))
-    print("  Iterations: {}  Warmup: {}".format(args.iterations, args.warmup))
+    log.header("TRTEXEC BENCHMARK")
+    log.metric("Model", args.model)
+    log.metric("Precisions", ", ".join(pr.upper() for pr in args.precision))
+    log.metric("Iterations", args.iterations)
+    log.metric("Warmup", args.warmup)
 
     all_results = []
     base_name = os.path.splitext(args.model)[0]
 
     for prec in args.precision:
-        print("\n--- {} ---".format(prec.upper()))
-
-        # Check for cached engine first
+        log.step("{} precision".format(prec.upper()))
         cached = "{}-{}.engine".format(base_name, prec)
         if os.path.isfile(cached):
-            print("[INFO] Using cached engine: {}".format(cached))
-            model_input = cached
-            save_path = None
+            log.ok("Using cached engine: {}".format(cached))
+            model_input, save_path = cached, None
         else:
+            log.wait("Building {} engine from ONNX...".format(prec.upper()))
             model_input = args.model
             save_path = cached if args.save_engine else None
 
@@ -186,12 +178,14 @@ def main():
             print_results(stats, prec, args.model)
             all_results.append((prec.upper(), stats))
             if args.csv:
-                print_csv(prec.upper(), stats)
+                keys = ["avg_ms", "min_ms", "max_ms", "median_ms", "p99_ms", "fps"]
+                print("CSV:{},{}".format(prec.upper(), ",".join(str(stats.get(k, "")) for k in keys)))
         else:
-            print("[WARN] Failed to parse {} results.".format(prec.upper()))
+            log.warn("Failed to parse {} results.".format(prec.upper()))
 
     if len(all_results) > 1:
         print_comparison(all_results)
+    log.ok("Benchmark complete.")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,21 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="$SCRIPT_DIR/models"
 
+# --- Colors and emoji helpers ---
+if [ -t 1 ]; then
+    C_RST="\033[0m"; C_BOLD="\033[1m"; C_DIM="\033[2m"
+    C_RED="\033[31m"; C_GRN="\033[32m"; C_YEL="\033[33m"; C_CYA="\033[36m"
+else
+    C_RST=""; C_BOLD=""; C_DIM=""; C_RED=""; C_GRN=""; C_YEL=""; C_CYA=""
+fi
+_info()  { echo -e "${C_CYA}${C_BOLD}ℹ️  INFO${C_RST} $1"; }
+_ok()    { echo -e "${C_GRN}${C_BOLD}✅ OK  ${C_RST} $1"; }
+_warn()  { echo -e "${C_YEL}${C_BOLD}⚠️  WARN${C_RST} $1"; }
+_err()   { echo -e "${C_RED}${C_BOLD}❌ ERR ${C_RST} $1"; }
+_hdr()   { echo -e "\n${C_CYA}========================================================${C_RST}"; \
+           echo -e "  $1 ${C_BOLD}$2${C_RST}"; \
+           echo -e "${C_CYA}========================================================${C_RST}"; }
+
 MODEL_NAME="yolov8n"; ITERATIONS=100; WARMUP=10; BATCH_SIZE=1
 MODE="auto"  # auto, trtexec, trt-python, ort, all
 TRT_PYTHON_PRECISIONS=""
@@ -59,26 +74,21 @@ if [ "$MODE" = "auto" ]; then
     fi
 fi
 
-echo ""
-echo "========================================================"
-echo "  JETSON BENCHMARK RUNNER (native, no Docker)"
-echo "========================================================"
-echo "  Model: $MODEL_NAME | Iters: $ITERATIONS | Warmup: $WARMUP | Batch: $BATCH_SIZE"
-echo "  Mode:  $MODE | TRT Python: $HAS_TRT_PYTHON | trtexec: $HAS_TRTEXEC | ORT: $HAS_ORT"
+_hdr "🚀" "JETSON BENCHMARK RUNNER (native, no Docker)"
+_info "Model: $MODEL_NAME | Iters: $ITERATIONS | Warmup: $WARMUP | Batch: $BATCH_SIZE"
+_info "Mode:  $MODE | TRT Python: $HAS_TRT_PYTHON | trtexec: $HAS_TRTEXEC | ORT: $HAS_ORT"
 echo ""
 
-[ ! -f /etc/nv_tegra_release ] && echo "[WARN] Not a Jetson device." && echo ""
+[ ! -f /etc/nv_tegra_release ] && _warn "Not a Jetson device." && echo ""
 
 if [ ! -f "$ONNX_FILE" ]; then
-    echo "[ERROR] Model not found: $ONNX_FILE"
-    echo "  scp dev-host:benchmarkCLI/models/$MODEL_NAME.onnx $MODELS_DIR/"
+    _err "Model not found: $ONNX_FILE"
+    _info "scp dev-host:benchmarkCLI/models/$MODEL_NAME.onnx $MODELS_DIR/"
     exit 1
 fi
 
 # --- Hardware info ---
-echo "========================================================"
-echo "  SYSTEM HARDWARE INFO"
-echo "========================================================"
+_hdr "🖥️ " "SYSTEM HARDWARE INFO"
 python3 "$SCRIPT_DIR/hardware-info.py"
 echo ""
 
@@ -86,9 +96,7 @@ echo ""
 TRTEXEC_CSV=""
 if [ "$MODE" = "trtexec" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_TRTEXEC" = true ]; then
-        echo "========================================================"
-        echo "  TRTEXEC BENCHMARK (FP32/FP16/INT8)"
-        echo "========================================================"
+        _hdr "📊" "TRTEXEC BENCHMARK (FP32/FP16/INT8)"
         PREC_ARGS="-p fp16"
         [ -n "$TRT_PYTHON_PRECISIONS" ] && PREC_ARGS="-p $TRT_PYTHON_PRECISIONS"
         TRT_TMPFILE=$(mktemp /tmp/trt-bench.XXXXXX)
@@ -98,24 +106,22 @@ if [ "$MODE" = "trtexec" ] || [ "$MODE" = "all" ]; then
         rm -f "$TRT_TMPFILE"
         echo ""
     else
-        echo "[WARN] trtexec not found. Skipping."
+        _warn "trtexec not found. Skipping."
     fi
 fi
 
 # --- TRT Python benchmark (FP32/FP16/INT8) ---
 if [ "$MODE" = "trt-python" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_TRT_PYTHON" = true ]; then
-        echo "========================================================"
-        echo "  TRT PYTHON BENCHMARK (FP32/FP16/INT8)"
-        echo "========================================================"
+        _hdr "🐍" "TRT PYTHON BENCHMARK (FP32/FP16/INT8)"
         PREC_ARGS=""
         [ -n "$TRT_PYTHON_PRECISIONS" ] && PREC_ARGS="-p $TRT_PYTHON_PRECISIONS"
         python3 "$SCRIPT_DIR/trt-python-benchmark.py" \
             "$ONNX_FILE" $PREC_ARGS -n "$ITERATIONS" -w "$WARMUP" --save-engine
         echo ""
     else
-        echo "[WARN] tensorrt/pycuda not available. Skipping TRT Python benchmark."
-        echo "       Install: pip3 install --user pycuda"
+        _warn "tensorrt/pycuda not available. Skipping TRT Python benchmark."
+        _info "Install: pip3 install --user pycuda"
     fi
 fi
 
@@ -123,9 +129,7 @@ fi
 ORT_CSV=""
 if [ "$MODE" = "ort" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_ORT" = true ]; then
-        echo "========================================================"
-        echo "  ONNXRUNTIME BENCHMARK (TensorRT EP -> CUDA EP -> CPU)"
-        echo "========================================================"
+        _hdr "📊" "ONNXRUNTIME BENCHMARK (TensorRT EP -> CUDA EP -> CPU)"
         ORT_TMPFILE=$(mktemp /tmp/ort-bench.XXXXXX)
         python3 "$SCRIPT_DIR/onnx-benchmark.py" \
             "$ONNX_FILE" -p tensorrt -n "$ITERATIONS" -w "$WARMUP" -b "$BATCH_SIZE" --csv 2>&1 | tee "$ORT_TMPFILE"
@@ -133,7 +137,7 @@ if [ "$MODE" = "ort" ] || [ "$MODE" = "all" ]; then
         rm -f "$ORT_TMPFILE"
         echo ""
     else
-        echo "[WARN] onnxruntime not installed. Skipping."
+        _warn "onnxruntime not installed. Skipping."
     fi
 fi
 
@@ -151,46 +155,38 @@ parse_trtexec_csv "$TRTEXEC_CSV"
 parse_ort_csv "$ORT_CSV"
 
 if [ -n "$TRTEXEC_CSV" ] || [ -n "$ORT_CSV" ]; then
-    echo "========================================================"
-    echo "  JETSON BENCHMARK SUMMARY"
-    echo "========================================================"
+    _hdr "🏁" "JETSON BENCHMARK SUMMARY"
+    _info "Device: $(head -1 /etc/nv_tegra_release 2>/dev/null | cut -c1-60 || echo 'Unknown')"
+    _info "Model:  $MODEL_NAME | Iters: $ITERATIONS | Batch: $BATCH_SIZE"
     echo ""
-    echo "  Device:      $(head -1 /etc/nv_tegra_release 2>/dev/null | cut -c1-60 || echo 'Unknown')"
-    echo "  Model:       $MODEL_NAME | Iters: $ITERATIONS | Batch: $BATCH_SIZE"
-    echo ""
-
     if [ -n "$TRTEXEC_CSV" ] && [ -n "$ORT_CSV" ]; then
-        printf "  %-20s %15s %18s\n" "Metric" "trtexec (FP16)" "ORT ($ORT_PROVIDER)"
-        printf "  %-20s %15s %18s\n" "--------------------" "---------------" "------------------"
+        printf "  %-20s %15s %18s\n" "Metric" "trtexec" "ORT ($ORT_PROVIDER)"
+        echo -e "  ${C_DIM}$(printf '%.0s-' {1..55})${C_RST}"
         for m in "Avg latency:TRT_AVG:ORT_AVG" "Min latency:TRT_MIN:ORT_MIN" "Max latency:TRT_MAX:ORT_MAX" \
                  "Median:TRT_MEDIAN:ORT_MEDIAN" "P95:TRT_P95:ORT_P95" "P99:TRT_P99:ORT_P99"; do
             IFS=':' read -r label v1 v2 <<< "$m"
             [ -z "${!v1}" ] && [ -z "${!v2}" ] && continue
-            printf "  %-20s %13s ms %16s ms\n" "$label" "${!v1:-N/A}" "${!v2:-N/A}"
+            printf "  %-20s ${C_BOLD}%11s ms${C_RST} ${C_BOLD}%14s ms${C_RST}\n" "$label" "${!v1:-N/A}" "${!v2:-N/A}"
         done
-        printf "  %-20s %15s %18s\n" "FPS" "$TRT_FPS" "$ORT_FPS"
+        printf "  %-20s ${C_GRN}${C_BOLD}%13s${C_RST} ${C_GRN}${C_BOLD}%16s${C_RST}\n" "FPS" "$TRT_FPS" "$ORT_FPS"
     elif [ -n "$TRTEXEC_CSV" ]; then
-        printf "  %-20s %15s\n" "Metric" "trtexec (FP16)"
-        printf "  %-20s %15s\n" "--------------------" "---------------"
+        printf "  %-20s %15s\n" "Metric" "trtexec"
+        echo -e "  ${C_DIM}$(printf '%.0s-' {1..36})${C_RST}"
         for m in "Avg:TRT_AVG" "Min:TRT_MIN" "Median:TRT_MEDIAN" "P95:TRT_P95" "P99:TRT_P99"; do
-            IFS=':' read -r l v <<< "$m"
-            [ -z "${!v}" ] && continue
-            printf "  %-20s %13s ms\n" "$l" "${!v}"
+            IFS=':' read -r l v <<< "$m"; [ -z "${!v}" ] && continue
+            printf "  %-20s ${C_BOLD}%11s ms${C_RST}\n" "$l" "${!v}"
         done
-        printf "  %-20s %15s\n" "FPS" "$TRT_FPS"
+        printf "  %-20s ${C_GRN}${C_BOLD}%13s${C_RST}\n" "FPS" "$TRT_FPS"
     elif [ -n "$ORT_CSV" ]; then
         printf "  %-20s %18s\n" "Metric" "ORT ($ORT_PROVIDER)"
-        printf "  %-20s %18s\n" "--------------------" "------------------"
+        echo -e "  ${C_DIM}$(printf '%.0s-' {1..40})${C_RST}"
         for m in "Avg:ORT_AVG" "Min:ORT_MIN" "Median:ORT_MEDIAN" "P95:ORT_P95" "P99:ORT_P99"; do
-            IFS=':' read -r l v <<< "$m"
-            [ -z "${!v}" ] && continue
-            printf "  %-20s %16s ms\n" "$l" "${!v}"
+            IFS=':' read -r l v <<< "$m"; [ -z "${!v}" ] && continue
+            printf "  %-20s ${C_BOLD}%14s ms${C_RST}\n" "$l" "${!v}"
         done
-        printf "  %-20s %18s\n" "FPS" "$ORT_FPS"
+        printf "  %-20s ${C_GRN}${C_BOLD}%16s${C_RST}\n" "FPS" "$ORT_FPS"
     fi
 fi
 
 echo ""
-echo "========================================================="
-echo "  Benchmark complete."
-echo "========================================================="
+_ok "Benchmark complete."

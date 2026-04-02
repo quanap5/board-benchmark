@@ -7,7 +7,6 @@ import subprocess
 
 PROC_PATH = "/host/proc" if os.path.exists("/host/proc/cpuinfo") else "/proc"
 
-
 def get_cpu_info():
     """Get CPU information."""
     info = {"name": platform.processor() or "Unknown"}
@@ -137,16 +136,21 @@ def _get_tegra_gpu():
     return gpu
 
 
+_C = hasattr(__import__("sys").stdout, "isatty") and __import__("sys").stdout.isatty()
+_CYAN, _BOLD, _RST = ("\033[36m", "\033[1m", "\033[0m") if _C else ("", "", "")
+_ICONS = {"OS": "🖥️ ", "CPU": "⚙️ ", "Memory": "🧠", "Disk": "💾", "GPU": "🎮"}
+
+
 def print_section(title, items):
-    """Print a formatted section."""
-    print(f"\n{'=' * 50}\n  {title}\n{'=' * 50}")
+    """Print a formatted section with color and emoji."""
+    icon = next((v for k, v in _ICONS.items() if k in title), "📋")
+    line = "{}{}{}".format(_CYAN, "=" * 50, _RST)
+    print("\n{}\n  {} {}{}{}\n{}".format(line, icon, _BOLD, title, _RST, line))
     for key, value in items:
-        print(f"  {key:<20} {value}")
+        print("  {:<20} {}{}{}".format(key, _BOLD, value, _RST))
 
 
 def main():
-    print("\n  HARDWARE SYSTEM INFORMATION")
-
     print_section("OS / Kernel", [
         ("Hostname:", platform.node()), ("System:", platform.system()),
         ("Kernel:", platform.release()), ("Version:", platform.version()),
@@ -179,16 +183,15 @@ def main():
 
     gpus = get_gpu_info()
     if gpus:
-        gpu_items = []
+        items = []
         for i, g in enumerate(gpus):
-            gpu_items.append((f"GPU {i}:", g["name"]))
-            for key in ["type", "memory", "driver"]:
-                if key in g:
-                    gpu_items.append((f"  {key.title()}:", g[key]))
-        print_section("GPU", gpu_items)
+            items.append((f"GPU {i}:", g["name"]))
+            for k in ["type", "memory", "driver"]:
+                if k in g:
+                    items.append((f"  {k.title()}:", g[k]))
+        print_section("GPU", items)
     else:
         print_section("GPU", [("Status:", "No GPU detected")])
-
     print()
 
 

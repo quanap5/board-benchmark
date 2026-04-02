@@ -16,14 +16,16 @@ try:
     import pycuda.driver as cuda
     import pycuda.autoinit  # noqa: F401
 except ImportError as e:
-    print("[ERROR] Missing: {}".format(e))
-    print("  tensorrt and pycuda ship with JetPack. Check your install.")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    log = __import__("importlib").import_module("log-utils")
+    log.error("Missing: {}".format(e))
+    log.info("tensorrt and pycuda ship with JetPack. Check your install.")
     sys.exit(1)
 
-# Import engine builder from sibling module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 builder_mod = import_module("trt-engine-builder")
+log = import_module("log-utils")
 build_engine = builder_mod.build_engine
 save_engine = builder_mod.save_engine
 
@@ -33,9 +35,7 @@ def run_benchmark(engine, warmup, iterations):
     context = engine.create_execution_context()
     stream = cuda.Stream()
 
-    # Allocate device buffers
-    bindings = []
-    device_buffers = []
+    bindings, device_buffers = [], []
     for i in range(engine.num_bindings):
         shape = engine.get_binding_shape(i)
         dtype = trt.nptype(engine.get_binding_dtype(i))
@@ -43,27 +43,23 @@ def run_benchmark(engine, warmup, iterations):
         device_buffers.append(buf)
         bindings.append(int(buf))
 
-    # Copy random input to GPU
     for i in range(engine.num_bindings):
         if engine.binding_is_input(i):
             shape = engine.get_binding_shape(i)
             dtype = trt.nptype(engine.get_binding_dtype(i))
-            data = np.random.randn(*shape).astype(dtype)
-            cuda.memcpy_htod_async(device_buffers[i], data, stream)
+            cuda.memcpy_htod_async(device_buffers[i],
+                                   np.random.randn(*shape).astype(dtype), stream)
     stream.synchronize()
 
-    # Warmup
-    print("[INFO] Warmup ({} runs)...".format(warmup))
+    log.wait("Warmup ({} runs)...".format(warmup))
     for _ in range(warmup):
         context.execute_async_v2(bindings=bindings, stream_handle=stream.handle)
     stream.synchronize()
 
-    # Benchmark with CUDA events
-    print("[INFO] Benchmarking ({} runs)...".format(iterations))
+    log.info("Benchmarking ({} runs)...".format(iterations))
     latencies = []
     for _ in range(iterations):
-        start = cuda.Event()
-        end = cuda.Event()
+        start, end = cuda.Event(), cuda.Event()
         start.record(stream)
         context.execute_async_v2(bindings=bindings, stream_handle=stream.handle)
         end.record(stream)
@@ -92,32 +88,26 @@ def compute_stats(latencies):
 
 def print_results(stats, precision, model_path, iterations):
     """Print formatted benchmark results."""
-    print("\n" + "=" * 50)
-    print("  BENCHMARK RESULTS [{}]".format(precision))
-    print("=" * 50)
-    print("  Model:             {}".format(model_path))
-    print("  Iterations:        {}".format(iterations))
+    log.header("BENCHMARK RESULTS [{}]".format(precision))
+    log.metric("Model", model_path)
+    log.metric("Iterations", iterations)
     for label, key, unit in [
         ("Avg latency", "avg", "ms"), ("Min latency", "min", "ms"),
         ("Max latency", "max", "ms"), ("Median latency", "median", "ms"),
         ("P95 latency", "p95", "ms"), ("P99 latency", "p99", "ms"),
         ("Std deviation", "std", "ms"), ("FPS", "fps", ""),
     ]:
-        sfx = " {}".format(unit) if unit else ""
-        print("  {:<20} {}{}".format(label, stats[key], sfx))
-    print("=" * 50)
+        log.metric(label, stats[key], unit)
 
 
 def print_comparison(all_results):
     """Print side-by-side comparison table."""
-    print("\n" + "=" * 60)
-    print("  PRECISION COMPARISON")
-    print("=" * 60)
-    header = "  {:<16}".format("Metric")
+    log.header("PRECISION COMPARISON")
+    hdr = "  {:<16}".format("Metric")
     for prec, _ in all_results:
-        header += " {:>12}".format(prec)
-    print(header)
-    print("  " + "-" * (16 + 13 * len(all_results)))
+        hdr += " {:>14}".format(log.c(prec, log.BOLD + log.CYAN))
+    print(hdr)
+    log.divider()
 
     for label, key, unit in [
         ("Avg latency", "avg", "ms"), ("Min latency", "min", "ms"),
@@ -127,43 +117,40 @@ def print_comparison(all_results):
         row = "  {:<16}".format(label)
         for _, stats in all_results:
             val = "{}{}".format(stats[key], " " + unit if unit else "")
-            row += " {:>12}".format(val)
+            row += " {:>14}".format(val)
         print(row)
 
-    # Speedup vs first precision
     base_prec, base_stats = all_results[0]
     if len(all_results) > 1:
         print("")
         for prec, stats in all_results[1:]:
             sp = round(base_stats["avg"] / stats["avg"], 2) if stats["avg"] > 0 else 0
-            print("  {} vs {} speedup: {}x".format(prec, base_prec, sp))
-    print("=" * 60)
+            log.speed("{} vs {} speedup: {}x".format(prec, base_prec, sp))
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="TRT Python API benchmark (FP32/FP16/INT8)")
+    p = argparse.ArgumentParser(description="TRT Python API benchmark (FP32/FP16/INT8)")
     p.add_argument("model", help="Path to ONNX model")
     p.add_argument("-p", "--precision", nargs="+", default=["fp32", "fp16", "int8"],
-                   choices=["fp32", "fp16", "int8"],
-                   help="Precision(s) to benchmark (default: all three)")
+                   choices=["fp32", "fp16", "int8"])
     p.add_argument("-n", "--iterations", type=int, default=100)
     p.add_argument("-w", "--warmup", type=int, default=10)
-    p.add_argument("--workspace", type=int, default=1024, help="Workspace MB")
-    p.add_argument("--save-engine", action="store_true", help="Save .engine files")
+    p.add_argument("--workspace", type=int, default=1024)
+    p.add_argument("--save-engine", action="store_true")
     args = p.parse_args()
 
-    print("\n  TRT PYTHON BENCHMARK")
-    print("  Model:      {}".format(args.model))
-    print("  Precisions: {}".format(", ".join(pr.upper() for pr in args.precision)))
-    print("  Iterations: {}  Warmup: {}".format(args.iterations, args.warmup))
+    log.header("TRT PYTHON BENCHMARK")
+    log.metric("Model", args.model)
+    log.metric("Precisions", ", ".join(pr.upper() for pr in args.precision))
+    log.metric("Iterations", args.iterations)
+    log.metric("Warmup", args.warmup)
 
     all_results = []
     for prec in args.precision:
-        print("\n--- Building {} engine ---".format(prec.upper()))
+        log.step("Building {} engine...".format(prec.upper()))
         engine = build_engine(args.model, prec, args.workspace)
         if not engine:
-            print("[WARN] Skipping {} (build failed)".format(prec.upper()))
+            log.warn("Skipping {} (build failed)".format(prec.upper()))
             continue
         if args.save_engine:
             base = os.path.splitext(args.model)[0]
@@ -176,6 +163,7 @@ def main():
 
     if len(all_results) > 1:
         print_comparison(all_results)
+    log.ok("Benchmark complete.")
 
 
 if __name__ == "__main__":
