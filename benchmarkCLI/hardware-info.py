@@ -11,7 +11,6 @@ PROC_PATH = "/host/proc" if os.path.exists("/host/proc/cpuinfo") else "/proc"
 def get_cpu_info():
     """Get CPU information."""
     info = {"name": platform.processor() or "Unknown"}
-
     try:
         with open(f"{PROC_PATH}/cpuinfo") as f:
             for line in f:
@@ -23,7 +22,6 @@ def get_cpu_info():
                     info["threads_per_socket"] = int(line.split(":")[1].strip())
     except FileNotFoundError:
         pass
-
     info["logical_cpus"] = os.cpu_count() or 0
     return info
 
@@ -60,12 +58,8 @@ def get_disk_info():
             parts = line.split()
             if len(parts) >= 6:
                 disks.append({
-                    "device": parts[0],
-                    "size": parts[1],
-                    "used": parts[2],
-                    "available": parts[3],
-                    "use_pct": parts[4],
-                    "mount": parts[5],
+                    "device": parts[0], "size": parts[1], "used": parts[2],
+                    "available": parts[3], "use_pct": parts[4], "mount": parts[5],
                 })
     except FileNotFoundError:
         pass
@@ -73,8 +67,10 @@ def get_disk_info():
 
 
 def get_gpu_info():
-    """Get GPU information via lspci or nvidia-smi."""
+    """Get GPU info via nvidia-smi, Tegra SoC detection, or lspci."""
     gpus = []
+
+    # 1. Desktop NVIDIA GPU (nvidia-smi)
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
@@ -85,18 +81,22 @@ def get_gpu_info():
             for line in result.stdout.strip().split("\n"):
                 parts = [p.strip() for p in line.split(",")]
                 if len(parts) >= 3:
-                    gpus.append({
-                        "name": parts[0],
-                        "memory": parts[1],
-                        "driver": parts[2],
-                    })
+                    gpus.append({"name": parts[0], "memory": parts[1], "driver": parts[2]})
             return gpus
     except FileNotFoundError:
         pass
 
+    # 2. Jetson Tegra GPU (integrated SoC, not on PCIe bus)
+    if os.path.exists("/etc/nv_tegra_release"):
+        gpu = _get_tegra_gpu()
+        if gpu:
+            return [gpu]
+
+    # 3. Fallback: lspci for discrete GPUs
     try:
         result = subprocess.run(
-            ["lspci"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True
+            ["lspci"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True
         )
         for line in result.stdout.split("\n"):
             if "VGA" in line or "3D controller" in line:
@@ -106,22 +106,40 @@ def get_gpu_info():
     return gpus
 
 
-def get_os_info():
-    """Get OS and kernel information."""
-    return {
-        "system": platform.system(),
-        "release": platform.release(),
-        "version": platform.version(),
-        "architecture": platform.machine(),
-        "hostname": platform.node(),
-    }
+def _get_tegra_gpu():
+    """Detect Tegra integrated GPU from sysfs and /etc/nv_tegra_release."""
+    try:
+        with open("/etc/nv_tegra_release") as f:
+            release = f.read().strip()
+    except (IOError, OSError):
+        release = ""
+
+    names = {"33": "Tegra X1 (Maxwell, 256 CUDA)", "24": "Tegra X2 (Pascal, 256 CUDA)",
+             "25": "Tegra Xavier (Volta, 512 CUDA)", "35": "Tegra Orin (Ampere)"}
+
+    chip_id = ""
+    for p in ["/sys/module/tegra_fuse/parameters/tegra_chip_id", "/sys/devices/soc0/soc_id"]:
+        try:
+            with open(p) as f:
+                chip_id = f.read().strip()
+                break
+        except (IOError, OSError):
+            continue
+
+    name = names.get(chip_id, "Tegra X2 (Pascal, 256 CUDA)" if "R32" in release else "Tegra GPU")
+    gpu = {"name": "NVIDIA " + name, "type": "Integrated (SoC)"}
+
+    mem = get_memory_info()
+    if mem.get("total_gb"):
+        gpu["memory"] = "{} MB (shared)".format(int(mem["total_gb"] * 1024))
+    if release:
+        gpu["driver"] = "L4T " + release.split(",")[0].strip()
+    return gpu
 
 
 def print_section(title, items):
     """Print a formatted section."""
-    print(f"\n{'=' * 50}")
-    print(f"  {title}")
-    print(f"{'=' * 50}")
+    print(f"\n{'=' * 50}\n  {title}\n{'=' * 50}")
     for key, value in items:
         print(f"  {key:<20} {value}")
 
@@ -129,19 +147,15 @@ def print_section(title, items):
 def main():
     print("\n  HARDWARE SYSTEM INFORMATION")
 
-    os_info = get_os_info()
     print_section("OS / Kernel", [
-        ("Hostname:", os_info["hostname"]),
-        ("System:", os_info["system"]),
-        ("Kernel:", os_info["release"]),
-        ("Version:", os_info["version"]),
-        ("Architecture:", os_info["architecture"]),
+        ("Hostname:", platform.node()), ("System:", platform.system()),
+        ("Kernel:", platform.release()), ("Version:", platform.version()),
+        ("Architecture:", platform.machine()),
     ])
 
     cpu = get_cpu_info()
     print_section("CPU", [
-        ("Model:", cpu["name"]),
-        ("Logical CPUs:", cpu["logical_cpus"]),
+        ("Model:", cpu["name"]), ("Logical CPUs:", cpu["logical_cpus"]),
         ("Cores/Socket:", cpu.get("cores_per_socket", "N/A")),
         ("Threads/Socket:", cpu.get("threads_per_socket", "N/A")),
     ])
@@ -158,23 +172,19 @@ def main():
 
     disks = get_disk_info()
     if disks:
-        disk_items = []
-        for d in disks:
-            disk_items.append((
-                f"{d['mount']}:",
-                f"{d['used']}/{d['size']} ({d['use_pct']}) - {d['device']}"
-            ))
-        print_section("Disks", disk_items)
+        print_section("Disks", [
+            (f"{d['mount']}:", f"{d['used']}/{d['size']} ({d['use_pct']}) - {d['device']}")
+            for d in disks
+        ])
 
     gpus = get_gpu_info()
     if gpus:
         gpu_items = []
         for i, g in enumerate(gpus):
             gpu_items.append((f"GPU {i}:", g["name"]))
-            if "memory" in g:
-                gpu_items.append(("  Memory:", g["memory"]))
-            if "driver" in g:
-                gpu_items.append(("  Driver:", g["driver"]))
+            for key in ["type", "memory", "driver"]:
+                if key in g:
+                    gpu_items.append((f"  {key.title()}:", g[key]))
         print_section("GPU", gpu_items)
     else:
         print_section("GPU", [("Status:", "No GPU detected")])
