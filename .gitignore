@@ -8,7 +8,6 @@
 # Ignore artifacts inside benchmarkCLI
 benchmarkCLI/.venv/
 benchmarkCLI/models/*.pt
-benchmarkCLI/models/*.onnx
 benchmarkCLI/models/*.engine
 benchmarkCLI/models/*-convert.log
 __pycache__/
