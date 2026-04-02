@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Parse trtexec benchmark output into structured results."""
+"""Benchmark with trtexec CLI across FP32/FP16/INT8 precisions.
+
+Runs trtexec for each precision, parses output, prints comparison.
+Supports TensorRT 8.2 (JetPack 4.6) and newer output formats.
+"""
 
 import argparse
 import os
@@ -13,7 +17,6 @@ def find_trtexec():
     for path in ["/usr/src/tensorrt/bin/trtexec", "/usr/bin/trtexec"]:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
-    # Fallback: search PATH
     for d in os.environ.get("PATH", "").split(os.pathsep):
         p = os.path.join(d, "trtexec")
         if os.path.isfile(p) and os.access(p, os.X_OK):
@@ -21,55 +24,46 @@ def find_trtexec():
     return None
 
 
-def run_trtexec(model_path, iterations, warmup, fp16):
+def run_trtexec(model_path, precision, iterations, warmup, save_engine=None):
     """Run trtexec and stream output in real-time."""
     trtexec = find_trtexec()
     if not trtexec:
         print("[ERROR] trtexec not found.")
-        sys.exit(1)
+        return ""
 
-    cmd = [
-        trtexec,
-        "--iterations={}".format(iterations),
-        "--warmUp={}".format(warmup * 1000),
-    ]
+    cmd = [trtexec, "--iterations={}".format(iterations),
+           "--warmUp={}".format(warmup * 1000)]
 
     if model_path.endswith(".engine"):
         cmd.append("--loadEngine={}".format(model_path))
     else:
         cmd.append("--onnx={}".format(model_path))
 
-    if fp16:
+    if precision == "fp16":
         cmd.append("--fp16")
+    elif precision == "int8":
+        cmd.append("--int8")
 
-    print("[INFO] Running: {}".format(" ".join(cmd)))
+    if save_engine:
+        cmd.append("--saveEngine={}".format(save_engine))
+
+    print("[INFO] Running [{}]: {}".format(precision.upper(), " ".join(cmd)))
     print("")
 
-    # Stream output line-by-line so user sees progress
     captured = []
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        universal_newlines=True, bufsize=1
-    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            universal_newlines=True, bufsize=1)
     for line in proc.stdout:
         sys.stdout.write(line)
         sys.stdout.flush()
         captured.append(line)
     proc.wait()
-
     return "".join(captured)
 
 
 def parse_output(output):
-    """Parse trtexec timing output into stats dict.
-
-    Supports both TensorRT 8.2 (JetPack 4.6) and newer formats.
-    """
+    """Parse trtexec timing output into stats dict."""
     stats = {}
-
-    # Patterns for both TRT 8.2 (JetPack 4.6) and newer formats
-    # TRT 8.2: "min = 20.57 ms, max = 22.1 ms, mean = 21.3 ms, median = 20.9 ms, percentile(99%) = 21.8 ms"
-    # TRT 8.5+: "min: 20.57 ms  max: 22.1 ms  mean: 21.3 ms  median: 20.9 ms  percentile(99%): 21.8 ms"
     patterns = {
         "min_ms": r"min\s*[:=]\s*([\d.]+)\s*ms",
         "max_ms": r"max\s*[:=]\s*([\d.]+)\s*ms",
@@ -78,19 +72,17 @@ def parse_output(output):
         "p99_ms": r"percentile\(99%\)\s*[:=]\s*([\d.]+)\s*ms",
     }
 
-    # Find GPU Compute or Host Latency block, or search entire output
+    # Find timing block
     search_text = output
     for block_name in ["GPU Compute", "Host Latency", "Total Host"]:
-        block = ""
-        in_block = False
+        block, in_block = "", False
         for line in output.split("\n"):
             if block_name in line:
                 in_block = True
             if in_block:
                 block += line + "\n"
-                if "percentile" in line.lower() or line.strip() == "":
-                    if block.count("\n") > 1:
-                        in_block = False
+                if ("percentile" in line.lower() or not line.strip()) and block.count("\n") > 1:
+                    in_block = False
         if block:
             search_text = block
             break
@@ -100,81 +92,108 @@ def parse_output(output):
         if match:
             stats[key] = round(float(match.group(1)), 3)
 
-    # TRT 8.2 only reports one percentile (default 99%). P95 not available.
-    # Use P99 as P95 approximation if P95 is missing.
-    if "p99_ms" in stats and "p95_ms" not in stats:
-        stats["p95_ms"] = stats.get("median_ms", stats.get("p99_ms"))
-
-    # Extract throughput
     match = re.search(r"Throughput:\s*([\d.]+)\s*qps", output, re.IGNORECASE)
     if match:
         stats["fps"] = round(float(match.group(1)), 2)
-        stats["throughput_ips"] = stats["fps"]
     elif "avg_ms" in stats and stats["avg_ms"] > 0:
         stats["fps"] = round(1000.0 / stats["avg_ms"], 2)
-        stats["throughput_ips"] = stats["fps"]
 
     return stats
 
 
-def print_results(stats, model_path):
-    """Print formatted results."""
+def print_results(stats, precision, model_path):
+    """Print single precision results."""
     print("\n" + "=" * 50)
-    print("  TRTEXEC BENCHMARK RESULTS\n" + "=" * 50)
-    print("  Model:               {}".format(model_path))
-    print("  Backend:             TensorRT (native)\n")
+    print("  TRTEXEC RESULTS [{}]".format(precision.upper()))
+    print("=" * 50)
+    print("  Model:             {}".format(model_path))
     for label, key, unit in [
         ("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
-        ("Max latency", "max_ms", "ms"), ("Median latency", "median_ms", "ms"),
-        ("P95 latency", "p95_ms", "ms"), ("P99 latency", "p99_ms", "ms"),
-        ("FPS", "fps", ""), ("Throughput", "throughput_ips", "samples/s"),
+        ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
+        ("P99 latency", "p99_ms", "ms"), ("FPS", "fps", ""),
     ]:
         val = stats.get(key, "N/A")
-        suffix = " {}".format(unit) if unit and val != "N/A" else ""
-        print("  {:<20} {}{}".format(label, val, suffix))
+        sfx = " {}".format(unit) if unit and val != "N/A" else ""
+        print("  {:<20} {}{}".format(label, val, sfx))
     print("=" * 50)
 
 
-def print_csv_line(stats):
-    """Print CSV line for scripting."""
-    keys = ["avg_ms", "min_ms", "max_ms", "median_ms", "p95_ms", "p99_ms", "fps", "throughput_ips"]
-    print("CSV:trtexec,{}".format(",".join(str(stats.get(k, "")) for k in keys)))
+def print_comparison(all_results):
+    """Print side-by-side precision comparison table."""
+    print("\n" + "=" * 60)
+    print("  TRTEXEC PRECISION COMPARISON")
+    print("=" * 60)
+    header = "  {:<16}".format("Metric")
+    for prec, _ in all_results:
+        header += " {:>12}".format(prec)
+    print(header)
+    print("  " + "-" * (16 + 13 * len(all_results)))
+
+    for label, key, unit in [
+        ("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
+        ("Median", "median_ms", "ms"), ("P99", "p99_ms", "ms"), ("FPS", "fps", ""),
+    ]:
+        row = "  {:<16}".format(label)
+        for _, stats in all_results:
+            val = stats.get(key, "N/A")
+            sfx = " {}".format(unit) if unit and val != "N/A" else ""
+            row += " {:>12}".format("{}{}".format(val, sfx))
+        print(row)
+
+    # Speedup vs first precision
+    base_prec, base = all_results[0]
+    if len(all_results) > 1 and "avg_ms" in base:
+        print("")
+        for prec, stats in all_results[1:]:
+            if "avg_ms" in stats and stats["avg_ms"] > 0:
+                sp = round(base["avg_ms"] / stats["avg_ms"], 2)
+                print("  {} vs {} speedup: {}x".format(prec, base_prec, sp))
+    print("=" * 60)
 
 
-def parse_args():
-    """Parse command-line arguments."""
-    p = argparse.ArgumentParser(description="Benchmark with trtexec")
-    p.add_argument("model", help="Path to ONNX or TensorRT engine file")
-    p.add_argument("--iterations", "-n", type=int, default=100)
-    p.add_argument("--warmup", "-w", type=int, default=10)
-    p.add_argument("--fp16", action="store_true", default=True)
-    p.add_argument("--fp32", action="store_true", default=False)
-    p.add_argument("--csv", action="store_true", default=False)
-    return p.parse_args()
+def print_csv(precision, stats):
+    """Print CSV line."""
+    keys = ["avg_ms", "min_ms", "max_ms", "median_ms", "p99_ms", "fps"]
+    print("CSV:{},{}".format(precision, ",".join(str(stats.get(k, "")) for k in keys)))
 
 
 def main():
-    args = parse_args()
-    fp16 = args.fp16 and not args.fp32
+    p = argparse.ArgumentParser(description="trtexec benchmark (FP32/FP16/INT8)")
+    p.add_argument("model", help="Path to ONNX model or .engine file")
+    p.add_argument("-p", "--precision", nargs="+", default=["fp16"],
+                   choices=["fp32", "fp16", "int8"],
+                   help="Precision(s) to benchmark (default: fp16)")
+    p.add_argument("-n", "--iterations", type=int, default=100)
+    p.add_argument("-w", "--warmup", type=int, default=10)
+    p.add_argument("--save-engine", action="store_true", help="Save .engine files")
+    p.add_argument("--csv", action="store_true", default=False)
+    args = p.parse_args()
 
-    print("")
-    print("  TRTEXEC BENCHMARK")
+    print("\n  TRTEXEC BENCHMARK")
     print("  Model:      {}".format(args.model))
-    print("  Iterations: {}".format(args.iterations))
-    print("  Warmup:     {}".format(args.warmup))
-    print("  Precision:  {}".format("FP16" if fp16 else "FP32"))
+    print("  Precisions: {}".format(", ".join(pr.upper() for pr in args.precision)))
+    print("  Iterations: {}  Warmup: {}".format(args.iterations, args.warmup))
 
-    output = run_trtexec(args.model, args.iterations, args.warmup, fp16)
+    all_results = []
+    for prec in args.precision:
+        print("\n--- {} ---".format(prec.upper()))
+        engine_path = None
+        if args.save_engine and not args.model.endswith(".engine"):
+            base = os.path.splitext(args.model)[0]
+            engine_path = "{}-{}.engine".format(base, prec)
 
-    stats = parse_output(output)
-    if not stats:
-        print("[ERROR] Could not parse trtexec output.")
-        sys.exit(1)
+        output = run_trtexec(args.model, prec, args.iterations, args.warmup, engine_path)
+        stats = parse_output(output)
+        if stats:
+            print_results(stats, prec, args.model)
+            all_results.append((prec.upper(), stats))
+            if args.csv:
+                print_csv(prec.upper(), stats)
+        else:
+            print("[WARN] Failed to parse {} results.".format(prec.upper()))
 
-    print_results(stats, args.model)
-
-    if args.csv:
-        print_csv_line(stats)
+    if len(all_results) > 1:
+        print_comparison(all_results)
 
 
 if __name__ == "__main__":

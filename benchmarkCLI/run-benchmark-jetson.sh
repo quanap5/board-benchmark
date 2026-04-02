@@ -86,18 +86,14 @@ echo ""
 TRTEXEC_CSV=""
 if [ "$MODE" = "trtexec" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_TRTEXEC" = true ]; then
-        # Convert engine if needed
-        if [ ! -f "$ENGINE_FILE" ] || [ "$CONVERT_FIRST" = true ]; then
-            bash "$SCRIPT_DIR/convert-to-tensorrt.sh" --model "$MODEL_NAME" --fp16
-        fi
         echo "========================================================"
-        echo "  TRTEXEC BENCHMARK (TensorRT CLI, FP16)"
+        echo "  TRTEXEC BENCHMARK (FP32/FP16/INT8)"
         echo "========================================================"
-        BENCH_MODEL="$ONNX_FILE"
-        [ -f "$ENGINE_FILE" ] && BENCH_MODEL="$ENGINE_FILE"
+        PREC_ARGS="-p fp16"
+        [ -n "$TRT_PYTHON_PRECISIONS" ] && PREC_ARGS="-p $TRT_PYTHON_PRECISIONS"
         TRT_TMPFILE=$(mktemp /tmp/trt-bench.XXXXXX)
         python3 "$SCRIPT_DIR/trtexec-benchmark.py" \
-            "$BENCH_MODEL" -n "$ITERATIONS" -w "$WARMUP" --fp16 --csv 2>&1 | tee "$TRT_TMPFILE"
+            "$ONNX_FILE" $PREC_ARGS -n "$ITERATIONS" -w "$WARMUP" --save-engine --csv 2>&1 | tee "$TRT_TMPFILE"
         TRTEXEC_CSV=$(grep "^CSV:" "$TRT_TMPFILE" | tail -1)
         rm -f "$TRT_TMPFILE"
         echo ""
