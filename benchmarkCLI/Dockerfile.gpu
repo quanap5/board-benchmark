@@ -1,0 +1,16 @@
+FROM nvcr.io/nvidia/tensorrt:24.07-py3
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends pciutils procps && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-gpu.txt .
+RUN pip install --no-cache-dir -r requirements-gpu.txt
+
+COPY hardware-info.py .
+COPY onnx-benchmark.py .
+
+ENTRYPOINT ["python3"]
+CMD ["hardware-info.py"]
