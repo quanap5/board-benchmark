@@ -16,6 +16,7 @@ __pycache__/
 # Allow root files
 !.gitignore
 !README.md
+!LICENSE
 
 # Allow docs folder
 !docs/

@@ -260,3 +260,7 @@ graph LR
 | Dev | Python 3.10+, internet |
 | Desktop | Docker, NVIDIA Container Toolkit (GPU) |
 | Jetson | JetPack 4.6.x, ONNX model from dev machine |
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
