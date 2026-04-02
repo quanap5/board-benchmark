@@ -2,6 +2,7 @@
 """Parse trtexec benchmark output into structured results."""
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -9,15 +10,19 @@ import sys
 
 def find_trtexec():
     """Find trtexec binary on the system."""
-    import shutil
     for path in ["/usr/src/tensorrt/bin/trtexec", "/usr/bin/trtexec"]:
-        if shutil.which(path) or __import__("os").path.isfile(path):
+        if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
-    return shutil.which("trtexec")
+    # Fallback: search PATH
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        p = os.path.join(d, "trtexec")
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
 
 
 def run_trtexec(model_path, iterations, warmup, fp16):
-    """Run trtexec and capture output."""
+    """Run trtexec and stream output in real-time."""
     trtexec = find_trtexec()
     if not trtexec:
         print("[ERROR] trtexec not found.")
@@ -25,32 +30,41 @@ def run_trtexec(model_path, iterations, warmup, fp16):
 
     cmd = [
         trtexec,
-        f"--iterations={iterations}",
-        f"--warmUp={warmup * 1000}",
+        "--iterations={}".format(iterations),
+        "--warmUp={}".format(warmup * 1000),
         "--noDataTransfers",
     ]
 
     if model_path.endswith(".engine"):
-        cmd.append(f"--loadEngine={model_path}")
+        cmd.append("--loadEngine={}".format(model_path))
     else:
-        cmd.append(f"--onnx={model_path}")
+        cmd.append("--onnx={}".format(model_path))
 
     if fp16:
         cmd.append("--fp16")
 
-    print(f"[INFO] Running: {' '.join(cmd)}")
+    print("[INFO] Running: {}".format(" ".join(cmd)))
     print("")
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    output = result.stdout + result.stderr
-    return output
+    # Stream output line-by-line so user sees progress
+    captured = []
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        universal_newlines=True, bufsize=1
+    )
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        captured.append(line)
+    proc.wait()
+
+    return "".join(captured)
 
 
 def parse_output(output):
     """Parse trtexec timing output into stats dict."""
     stats = {}
 
-    # Match patterns like: "mean = 1.234 ms"
     patterns = {
         "min_ms": r"min\s*[:=]\s*([\d.]+)\s*ms",
         "max_ms": r"max\s*[:=]\s*([\d.]+)\s*ms",
@@ -60,11 +74,10 @@ def parse_output(output):
         "p95_ms": r"percentile\(95%\)\s*[:=]\s*([\d.]+)\s*ms",
     }
 
-    # Find the GPU Compute block
+    # Find the GPU Compute block for accurate timing
     compute_block = ""
-    lines = output.split("\n")
     in_compute = False
-    for line in lines:
+    for line in output.split("\n"):
         if "GPU Compute Time" in line or "GPU Compute" in line:
             in_compute = True
         if in_compute:
@@ -80,11 +93,9 @@ def parse_output(output):
             stats[key] = round(float(match.group(1)), 3)
 
     # Extract throughput
-    throughput_match = re.search(
-        r"Throughput:\s*([\d.]+)\s*qps", output, re.IGNORECASE
-    )
-    if throughput_match:
-        stats["fps"] = round(float(throughput_match.group(1)), 2)
+    match = re.search(r"Throughput:\s*([\d.]+)\s*qps", output, re.IGNORECASE)
+    if match:
+        stats["fps"] = round(float(match.group(1)), 2)
         stats["throughput_ips"] = stats["fps"]
     elif "avg_ms" in stats and stats["avg_ms"] > 0:
         stats["fps"] = round(1000.0 / stats["avg_ms"], 2)
@@ -99,8 +110,8 @@ def print_results(stats, model_path):
     print("=" * 50)
     print("  TRTEXEC BENCHMARK RESULTS")
     print("=" * 50)
-    print(f"  Model:               {model_path}")
-    print(f"  Backend:             TensorRT (native)")
+    print("  Model:               {}".format(model_path))
+    print("  Backend:             TensorRT (native)")
     print()
 
     fields = [
@@ -116,8 +127,8 @@ def print_results(stats, model_path):
 
     for label, key, unit in fields:
         val = stats.get(key, "N/A")
-        suffix = f" {unit}" if unit and val != "N/A" else ""
-        print(f"  {label:<20} {val}{suffix}")
+        suffix = " {}".format(unit) if unit and val != "N/A" else ""
+        print("  {:<20} {}{}".format(label, val, suffix))
 
     print("=" * 50)
 
@@ -129,7 +140,7 @@ def print_csv_line(stats):
         "p95_ms", "p99_ms", "fps", "throughput_ips",
     ]
     values = [str(stats.get(k, "")) for k in keys]
-    print(f"CSV:trtexec,{','.join(values)}")
+    print("CSV:trtexec,{}".format(",".join(values)))
 
 
 def parse_args():
@@ -137,46 +148,27 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Benchmark model with trtexec (no onnxruntime needed)"
     )
-    parser.add_argument(
-        "model", help="Path to ONNX or TensorRT engine file"
-    )
-    parser.add_argument(
-        "--iterations", "-n", type=int, default=100,
-        help="Benchmark iterations (default: 100)"
-    )
-    parser.add_argument(
-        "--warmup", "-w", type=int, default=10,
-        help="Warmup iterations (default: 10)"
-    )
-    parser.add_argument(
-        "--fp16", action="store_true", default=True,
-        help="Use FP16 precision (default: True)"
-    )
-    parser.add_argument(
-        "--fp32", action="store_true", default=False,
-        help="Use FP32 precision"
-    )
-    parser.add_argument(
-        "--csv", action="store_true", default=False,
-        help="Append CSV summary line"
-    )
+    parser.add_argument("model", help="Path to ONNX or TensorRT engine file")
+    parser.add_argument("--iterations", "-n", type=int, default=100)
+    parser.add_argument("--warmup", "-w", type=int, default=10)
+    parser.add_argument("--fp16", action="store_true", default=True)
+    parser.add_argument("--fp32", action="store_true", default=False)
+    parser.add_argument("--csv", action="store_true", default=False)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
     fp16 = args.fp16 and not args.fp32
 
     print("")
     print("  TRTEXEC BENCHMARK")
-    print(f"  Model:      {args.model}")
-    print(f"  Iterations: {args.iterations}")
-    print(f"  Warmup:     {args.warmup}")
-    print(f"  Precision:  {'FP16' if fp16 else 'FP32'}")
+    print("  Model:      {}".format(args.model))
+    print("  Iterations: {}".format(args.iterations))
+    print("  Warmup:     {}".format(args.warmup))
+    print("  Precision:  {}".format("FP16" if fp16 else "FP32"))
 
     output = run_trtexec(args.model, args.iterations, args.warmup, fp16)
-    print(output)
 
     stats = parse_output(output)
     if not stats:

@@ -68,10 +68,11 @@ if [ "$RUN_TRTEXEC" = true ]; then
     BENCH_MODEL="$ONNX_FILE"
     [ -f "$ENGINE_FILE" ] && BENCH_MODEL="$ENGINE_FILE"
 
-    TRTEXEC_RESULT=$(python3 "$SCRIPT_DIR/trtexec-benchmark.py" \
-        "$BENCH_MODEL" -n "$ITERATIONS" -w "$WARMUP" --fp16 --csv 2>&1)
-    echo "$TRTEXEC_RESULT"
-    TRTEXEC_CSV=$(echo "$TRTEXEC_RESULT" | grep "^CSV:" | tail -1)
+    TRT_TMPFILE=$(mktemp /tmp/trt-bench.XXXXXX)
+    python3 "$SCRIPT_DIR/trtexec-benchmark.py" \
+        "$BENCH_MODEL" -n "$ITERATIONS" -w "$WARMUP" --fp16 --csv 2>&1 | tee "$TRT_TMPFILE"
+    TRTEXEC_CSV=$(grep "^CSV:" "$TRT_TMPFILE" | tail -1)
+    rm -f "$TRT_TMPFILE"
     echo ""
 fi
 
@@ -82,10 +83,11 @@ if [ "$RUN_ORT" = true ]; then
         echo "========================================================"
         echo "  ONNXRUNTIME BENCHMARK (TensorRT EP -> CUDA EP -> CPU)"
         echo "========================================================"
-        ORT_RESULT=$(python3 "$SCRIPT_DIR/onnx-benchmark.py" \
-            "$ONNX_FILE" -p tensorrt -n "$ITERATIONS" -w "$WARMUP" -b "$BATCH_SIZE" --csv 2>&1)
-        echo "$ORT_RESULT"
-        ORT_CSV=$(echo "$ORT_RESULT" | grep "^CSV:" | tail -1)
+        ORT_TMPFILE=$(mktemp /tmp/ort-bench.XXXXXX)
+        python3 "$SCRIPT_DIR/onnx-benchmark.py" \
+            "$ONNX_FILE" -p tensorrt -n "$ITERATIONS" -w "$WARMUP" -b "$BATCH_SIZE" --csv 2>&1 | tee "$ORT_TMPFILE"
+        ORT_CSV=$(grep "^CSV:" "$ORT_TMPFILE" | tail -1)
+        rm -f "$ORT_TMPFILE"
         echo ""
     else
         echo "[WARN] onnxruntime not installed. Skipping. Use --trtexec-only or setup-jetson.sh"
