@@ -104,30 +104,46 @@ def print_results(stats, precision, model_path, iterations):
         log.metric(label, stats[key], unit)
 
 
-def print_comparison(all_results):
-    """Print side-by-side comparison table."""
-    log.header("PRECISION COMPARISON")
+def print_comparison(all_results, model_path, iterations):
+    """Print final comparison table with model info."""
+    model_name = os.path.basename(model_path).replace(".onnx", "")
+    log.header("FINAL COMPARISON — {} ({} iters)".format(model_name.upper(), iterations))
+
+    # Header row
     hdr = "  {:<16}".format("Metric")
     for prec, _ in all_results:
         hdr += " {:>14}".format(log.c(prec, log.BOLD + log.CYAN))
     print(hdr)
     log.divider()
+
+    # Latency rows
     for label, key, unit in [
         ("Avg latency", "avg", "ms"), ("Min latency", "min", "ms"),
-        ("Median", "median", "ms"), ("P95", "p95", "ms"),
-        ("P99", "p99", "ms"), ("Std dev", "std", "ms"), ("FPS", "fps", ""),
+        ("Max latency", "max", "ms"), ("Median", "median", "ms"),
+        ("P95", "p95", "ms"), ("P99", "p99", "ms"),
+        ("Std dev", "std", "ms"),
     ]:
         row = "  {:<16}".format(label)
-        for _, stats in all_results:
-            val = "{}{}".format(stats[key], " " + unit if unit else "")
-            row += " {:>14}".format(val)
+        for _, s in all_results:
+            row += " {:>14}".format("{} {}".format(s[key], unit))
         print(row)
+    log.divider()
+
+    # FPS row (highlighted)
+    row = "  {:<16}".format(log.c("FPS", log.BOLD))
+    for _, s in all_results:
+        row += " {:>14}".format(log.c(str(s["fps"]), log.BOLD + log.GREEN))
+    print(row)
+
+    # Speedup
     base_prec, base_stats = all_results[0]
     if len(all_results) > 1:
         print("")
-        for prec, stats in all_results[1:]:
-            sp = round(base_stats["avg"] / stats["avg"], 2) if stats["avg"] > 0 else 0
-            log.speed("{} vs {} speedup: {}x".format(prec, base_prec, sp))
+        for prec, s in all_results[1:]:
+            if s["avg"] > 0:
+                sp = round(base_stats["avg"] / s["avg"], 2)
+                fps_sp = round(s["fps"] / base_stats["fps"], 2) if base_stats["fps"] > 0 else 0
+                log.speed("{} vs {}: {}x latency | {}x FPS".format(prec, base_prec, sp, fps_sp))
 
 
 def main():
@@ -176,7 +192,7 @@ def main():
         del engine
 
     if len(all_results) > 1:
-        print_comparison(all_results)
+        print_comparison(all_results, args.model, args.iterations)
     log.ok("Benchmark complete.")
 
 

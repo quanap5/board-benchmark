@@ -107,38 +107,46 @@ def parse_output(output):
 def print_results(stats, precision, model_path):
     """Print single precision results."""
     log.header("TRTEXEC RESULTS [{}]".format(precision.upper()))
-    log.metric("Model", model_path)
-    for label, key, unit in [
-        ("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
-        ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
-        ("P99 latency", "p99_ms", "ms"), ("FPS", "fps", ""),
-    ]:
+    for label, key, unit in [("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
+                              ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
+                              ("P99", "p99_ms", "ms"), ("FPS", "fps", "")]:
         log.metric(label, stats.get(key, "N/A"), unit)
 
 
-def print_comparison(all_results):
-    """Print side-by-side precision comparison table."""
-    log.header("TRTEXEC PRECISION COMPARISON")
+def print_comparison(all_results, model_path, iterations):
+    """Print final comparison table with model info."""
+    model_name = os.path.basename(model_path).replace(".onnx", "").replace(".engine", "")
+    log.header("FINAL COMPARISON — {} ({} iters)".format(model_name.upper(), iterations))
+
     hdr = "  {:<16}".format("Metric")
     for prec, _ in all_results:
         hdr += " {:>14}".format(log.c(prec, log.BOLD + log.CYAN))
     print(hdr)
     log.divider()
+
     for label, key, unit in [("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
-                              ("Median", "median_ms", "ms"), ("P99", "p99_ms", "ms"), ("FPS", "fps", "")]:
+                              ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
+                              ("P99", "p99_ms", "ms")]:
         row = "  {:<16}".format(label)
         for _, s in all_results:
             v = s.get(key, "N/A")
-            val = "{}{}".format(v, " " + unit if unit and v != "N/A" else "")
-            row += " {:>14}".format(val)
+            row += " {:>14}".format("{} {}".format(v, unit) if v != "N/A" else "N/A")
         print(row)
+    log.divider()
+
+    row = "  {:<16}".format(log.c("FPS", log.BOLD))
+    for _, s in all_results:
+        row += " {:>14}".format(log.c(str(s.get("fps", "N/A")), log.BOLD + log.GREEN))
+    print(row)
+
     base_prec, base = all_results[0]
     if len(all_results) > 1 and "avg_ms" in base:
         print("")
         for prec, s in all_results[1:]:
             if "avg_ms" in s and s["avg_ms"] > 0:
                 sp = round(base["avg_ms"] / s["avg_ms"], 2)
-                log.speed("{} vs {} speedup: {}x".format(prec, base_prec, sp))
+                fps_sp = round(s["fps"] / base["fps"], 2) if base.get("fps", 0) > 0 else 0
+                log.speed("{} vs {}: {}x latency | {}x FPS".format(prec, base_prec, sp, fps_sp))
 
 
 def main():
@@ -184,7 +192,7 @@ def main():
             log.warn("Failed to parse {} results.".format(prec.upper()))
 
     if len(all_results) > 1:
-        print_comparison(all_results)
+        print_comparison(all_results, args.model, args.iterations)
     log.ok("Benchmark complete.")
 
 
