@@ -51,46 +51,53 @@ def fix_int64_to_int32(onnx_path):
     warnings or failures on TensorRT. This converts them to INT32.
     """
     import onnx
-    from onnx import numpy_helper, TensorProto, helper
+    from onnx import numpy_helper, TensorProto
+    import numpy as np
 
     model = onnx.load(onnx_path)
     fixed = 0
 
-    # Fix initializers (constant weights/tensors)
-    for initializer in model.graph.initializer:
-        if initializer.data_type == TensorProto.INT64:
-            data = numpy_helper.to_array(initializer).astype("int32")
-            initializer.CopyFrom(numpy_helper.from_array(data, name=initializer.name))
+    # 1. Fix initializers (constant tensors)
+    for init in model.graph.initializer:
+        if init.data_type == TensorProto.INT64:
+            data = numpy_helper.to_array(init).astype("int32")
+            init.CopyFrom(numpy_helper.from_array(data, name=init.name))
             fixed += 1
 
-    # Fix graph inputs/outputs
-    for tensor in list(model.graph.input) + list(model.graph.output):
-        if tensor.type.tensor_type.elem_type == TensorProto.INT64:
-            tensor.type.tensor_type.elem_type = TensorProto.INT32
+    # 2. Fix graph inputs/outputs
+    for t in list(model.graph.input) + list(model.graph.output):
+        if t.type.tensor_type.elem_type == TensorProto.INT64:
+            t.type.tensor_type.elem_type = TensorProto.INT32
             fixed += 1
 
-    # Fix Constant node attributes
-    for node in model.graph.node:
-        if node.op_type == "Constant":
-            for attr in node.attribute:
-                if attr.t.data_type == TensorProto.INT64:
-                    data = numpy_helper.to_array(attr.t).astype("int32")
-                    attr.t.CopyFrom(numpy_helper.from_array(data))
-                    fixed += 1
-
-    # Fix Cast nodes that cast TO int64 -> change to int32
-    for node in model.graph.node:
-        if node.op_type == "Cast":
-            for attr in node.attribute:
-                if attr.name == "to" and attr.i == TensorProto.INT64:
-                    attr.i = TensorProto.INT32
-                    fixed += 1
-
-    # Fix value_info (intermediate tensor type annotations)
+    # 3. Fix value_info (intermediate type annotations)
     for vi in model.graph.value_info:
         if vi.type.tensor_type.elem_type == TensorProto.INT64:
             vi.type.tensor_type.elem_type = TensorProto.INT32
             fixed += 1
+
+    # 4. Fix all nodes
+    for node in model.graph.node:
+        # Constant nodes with tensor attribute
+        if node.op_type == "Constant":
+            for attr in node.attribute:
+                if attr.name == "value" and attr.t.data_type == TensorProto.INT64:
+                    data = numpy_helper.to_array(attr.t).astype("int32")
+                    attr.t.CopyFrom(numpy_helper.from_array(data))
+                    fixed += 1
+        # Cast nodes targeting INT64
+        elif node.op_type == "Cast":
+            for attr in node.attribute:
+                if attr.name == "to" and attr.i == TensorProto.INT64:
+                    attr.i = TensorProto.INT32
+                    fixed += 1
+        # ConstantOfShape with INT64 value
+        elif node.op_type == "ConstantOfShape":
+            for attr in node.attribute:
+                if attr.name == "value" and attr.t.data_type == TensorProto.INT64:
+                    data = numpy_helper.to_array(attr.t).astype("int32")
+                    attr.t.CopyFrom(numpy_helper.from_array(data))
+                    fixed += 1
 
     if fixed > 0:
         onnx.save(model, onnx_path)

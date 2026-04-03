@@ -14,16 +14,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _fix_int64(onnx_path):
-    """Apply INT64->INT32 fix and verify no INT64 remains."""
+    """Apply INT64->INT32 fix only if needed. Skip if already clean."""
+    count = _count_int64(onnx_path)
+    if count == 0:
+        print("[OK] Already INT64-free (skip fix)")
+        return
+    print("[STEP] Found {} INT64 tensors. Fixing...".format(count))
     from importlib import import_module
     download_mod = import_module("download-yolo-model")
     download_mod.fix_int64_to_int32(onnx_path)
-    # Verify
     remaining = _count_int64(onnx_path)
     if remaining > 0:
         print("[WARN] {} INT64 tensors still remain after fix".format(remaining))
     else:
-        print("[OK] Model is INT64-free (TensorRT ready)")
+        print("[OK] Fixed. Model is INT64-free (TensorRT ready)")
 
 
 def _count_int64(onnx_path):
@@ -43,9 +47,9 @@ def _count_int64(onnx_path):
             for attr in node.attribute:
                 if attr.name == "to" and attr.i == TensorProto.INT64:
                     count += 1
-        if node.op_type == "Constant":
+        elif node.op_type in ("Constant", "ConstantOfShape"):
             for attr in node.attribute:
-                if attr.t.data_type == TensorProto.INT64:
+                if attr.name == "value" and attr.t.data_type == TensorProto.INT64:
                     count += 1
     return count
 
