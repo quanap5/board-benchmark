@@ -25,7 +25,7 @@ PROVIDER_MAP = {
 
 
 def create_session(model_path, provider):
-    """Create ONNX session with EP fallback chain."""
+    """Create ONNX session with EP fallback chain. Handles EP load failures."""
     requested = PROVIDER_MAP.get(provider, [provider])
     available = ort.get_available_providers()
     providers = [p for p in requested if p in available] or ["CPUExecutionProvider"]
@@ -36,7 +36,21 @@ def create_session(model_path, provider):
 
     opts = ort.SessionOptions()
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    session = ort.InferenceSession(model_path, opts, providers=providers)
+
+    # Try full EP list first, fallback one-by-one if EP crashes
+    for i in range(len(providers)):
+        try_eps = providers[i:]
+        try:
+            session = ort.InferenceSession(model_path, opts, providers=try_eps)
+            print(f"[INFO] Active EPs:    {session.get_providers()}")
+            return session
+        except Exception as e:
+            failed = try_eps[0]
+            print(f"[WARN] {failed} failed: {e}")
+            print(f"[INFO] Falling back, skipping {failed}...")
+
+    # Last resort: CPU only
+    session = ort.InferenceSession(model_path, opts, providers=["CPUExecutionProvider"])
     print(f"[INFO] Active EPs:    {session.get_providers()}")
     return session
 

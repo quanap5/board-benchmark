@@ -1,10 +1,11 @@
 #!/bin/bash
 # Build Docker images and benchmark ONNX model with EP fallback.
 # Usage:
-#   bash benchmarkCLI/run-benchmark.sh                    # GPU + CPU
-#   bash benchmarkCLI/run-benchmark.sh --cpu-only          # CPU only
-#   bash benchmarkCLI/run-benchmark.sh --gpu-only          # GPU only
-#   bash benchmarkCLI/run-benchmark.sh --model yolov8s -n 500
+#   bash benchmarkCLI/run-benchmark.sh                              # Docker: GPU + CPU
+#   bash benchmarkCLI/run-benchmark.sh --native --model yolov8n     # Native PC (no Docker)
+#   bash benchmarkCLI/run-benchmark.sh --cpu-only                   # Docker: CPU only
+#   bash benchmarkCLI/run-benchmark.sh --gpu-only                   # Docker: GPU only
+#   bash benchmarkCLI/run-benchmark.sh --model yolov8s -n 500       # Docker: custom
 
 set -e
 
@@ -16,6 +17,16 @@ if [ -f /etc/nv_tegra_release ]; then
     echo "[INFO] Jetson detected. Switching to native benchmark."
     exec bash "$SCRIPT_DIR/run-benchmark-jetson.sh" "$@"
 fi
+
+# --native flag -> run PC benchmark without Docker
+for arg in "$@"; do
+    if [ "$arg" = "--native" ]; then
+        # Remove --native from args and forward the rest
+        ARGS=()
+        for a in "$@"; do [ "$a" != "--native" ] && ARGS+=("$a"); done
+        exec bash "$SCRIPT_DIR/run-benchmark-pc.sh" "${ARGS[@]}"
+    fi
+done
 
 RUN_GPU=true; RUN_CPU=true; BUILD_ONLY=false; SKIP_BUILD=false
 MODEL_NAME="yolov8n"; ITERATIONS=100; WARMUP=10; BATCH_SIZE=1
