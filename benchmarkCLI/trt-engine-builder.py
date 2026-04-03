@@ -2,6 +2,7 @@
 """Build TensorRT engine from ONNX with FP32/FP16/INT8 precision.
 
 Uses tensorrt + ctypes CUDA bindings. No pycuda needed.
+Supports TensorRT 8.x and 10.x APIs via trt-compat.py.
 """
 
 import os
@@ -12,12 +13,13 @@ import numpy as np
 try:
     import tensorrt as trt
 except ImportError:
-    print("[ERROR] tensorrt not found. Is JetPack installed?")
+    print("[ERROR] tensorrt not found. Is JetPack/TensorRT SDK installed?")
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 cuda = import_module("cuda-utils")
+compat = import_module("trt-compat")
 
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
@@ -54,8 +56,7 @@ class DummyCalibrator(trt.IInt8EntropyCalibrator2):
 def build_engine(onnx_path, precision="fp16", workspace_mb=1024):
     """Build TensorRT engine from ONNX with specified precision."""
     builder = trt.Builder(TRT_LOGGER)
-    flag = int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
-    network = builder.create_network(1 << flag)
+    network = compat.create_network(builder)
     parser = trt.OnnxParser(network, TRT_LOGGER)
 
     with open(onnx_path, "rb") as f:
@@ -65,7 +66,7 @@ def build_engine(onnx_path, precision="fp16", workspace_mb=1024):
             return None
 
     config = builder.create_builder_config()
-    config.max_workspace_size = workspace_mb * (1 << 20)
+    compat.set_workspace(config, workspace_mb * (1 << 20))
 
     if precision == "fp16":
         if builder.platform_has_fast_fp16:
@@ -78,12 +79,12 @@ def build_engine(onnx_path, precision="fp16", workspace_mb=1024):
             config.set_flag(trt.BuilderFlag.INT8)
             config.set_flag(trt.BuilderFlag.FP16)
             config.int8_calibrator = DummyCalibrator(network)
-            print("[INFO] INT8 enabled (FP16 fallback for unsupported layers)")
+            print("[INFO] INT8 enabled (FP16 fallback)")
         else:
             print("[WARN] INT8 not supported. Using FP32.")
 
-    print("[INFO] Building engine ({})...".format(precision.upper()))
-    engine = builder.build_engine(network, config)
+    print("[INFO] Building engine ({})... TRT {}".format(precision.upper(), trt.__version__))
+    engine = compat.build_engine_compat(builder, network, config)
     if not engine:
         print("[ERROR] Engine build failed.")
     return engine
@@ -100,8 +101,7 @@ def save_engine(engine, path):
     """Save serialized engine to disk."""
     with open(path, "wb") as f:
         f.write(engine.serialize())
-    print("[INFO] Engine saved: {} ({})".format(
-        path, _human_size(os.path.getsize(path))))
+    print("[INFO] Engine saved: {} ({})".format(path, _human_size(os.path.getsize(path))))
 
 
 def _human_size(nbytes):

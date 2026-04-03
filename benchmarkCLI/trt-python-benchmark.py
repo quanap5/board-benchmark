@@ -24,6 +24,7 @@ def _run_single(model, precision, iterations, warmup, workspace, save_engine):
     import tensorrt as trt
     cuda = import_module("cuda-utils")
     builder_mod = import_module("trt-engine-builder")
+    compat = import_module("trt-compat")
 
     base_name = os.path.splitext(model)[0]
     cached = "{}-{}.engine".format(base_name, precision)
@@ -45,28 +46,27 @@ def _run_single(model, precision, iterations, warmup, workspace, save_engine):
     context = engine.create_execution_context()
     stream = cuda.Stream()
 
-    # Allocate buffers
-    bindings, device_buffers = [], []
-    for i in range(engine.num_bindings):
-        shape = engine.get_binding_shape(i)
-        dtype = trt.nptype(engine.get_binding_dtype(i))
-        buf = cuda.DeviceBuffer(int(np.prod(shape)) * np.dtype(dtype).itemsize)
-        device_buffers.append(buf)
-        bindings.append(int(buf))
+    # Allocate buffers using compat layer
+    io_info = compat.get_io_info(engine)
+    device_buffers = []
+    for info in io_info:
+        nbytes = int(np.prod(info["shape"])) * np.dtype(info["dtype"]).itemsize
+        device_buffers.append(cuda.DeviceBuffer(nbytes))
 
     # Copy random input
-    for i in range(engine.num_bindings):
-        if engine.binding_is_input(i):
-            shape = engine.get_binding_shape(i)
-            dtype = trt.nptype(engine.get_binding_dtype(i))
-            cuda.memcpy_htod_async(device_buffers[i],
-                                   np.random.randn(*shape).astype(dtype), stream)
+    for info, buf in zip(io_info, device_buffers):
+        if info["is_input"]:
+            data = np.random.randn(*info["shape"]).astype(info["dtype"])
+            cuda.memcpy_htod_async(buf, data, stream)
     stream.synchronize()
+
+    # Setup bindings (TRT 8.x) or tensor addresses (TRT 10.x)
+    bindings = compat.setup_bindings(context, io_info, device_buffers, stream.handle.value)
 
     # Warmup
     log.wait("Warmup ({} runs)...".format(warmup))
     for _ in range(warmup):
-        context.execute_async_v2(bindings=bindings, stream_handle=stream.handle.value)
+        compat.execute_async(context, bindings, stream.handle.value)
     stream.synchronize()
 
     # Benchmark
@@ -75,7 +75,7 @@ def _run_single(model, precision, iterations, warmup, workspace, save_engine):
     for _ in range(iterations):
         start, end = cuda.Event(), cuda.Event()
         start.record(stream)
-        context.execute_async_v2(bindings=bindings, stream_handle=stream.handle.value)
+        compat.execute_async(context, bindings, stream.handle.value)
         end.record(stream)
         end.synchronize()
         latencies.append(end.time_since(start))
