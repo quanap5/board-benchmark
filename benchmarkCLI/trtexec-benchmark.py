@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Benchmark with trtexec CLI across FP32/FP16/INT8 precisions.
 
-Runs trtexec for each precision, parses output, prints comparison.
+Each precision runs in a subprocess for clean GPU memory.
 Supports TensorRT 8.2 (JetPack 4.6) and newer output formats.
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -14,6 +15,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 log = import_module("log-utils")
+
+METHOD = "trtexec CLI"
 
 
 def find_trtexec():
@@ -28,168 +31,146 @@ def find_trtexec():
     return None
 
 
-def run_trtexec(model_path, precision, iterations, warmup, save_engine=None):
-    """Run trtexec and stream output in real-time."""
+def _run_single(model, precision, iterations, warmup, save_engine):
+    """Run trtexec for one precision (called via --_single)."""
     trtexec = find_trtexec()
     if not trtexec:
-        log.error("trtexec not found.")
-        return ""
+        log.error("trtexec not found."); sys.exit(1)
 
-    cmd = [trtexec, "--iterations={}".format(iterations),
-           "--warmUp={}".format(warmup * 1000)]
+    base_name = os.path.splitext(model)[0]
+    cached = "{}-{}.engine".format(base_name, precision)
 
-    if model_path.endswith(".engine"):
-        cmd.append("--loadEngine={}".format(model_path))
+    # Build command
+    cmd = [trtexec, "--iterations={}".format(iterations), "--warmUp={}".format(warmup * 1000)]
+    if os.path.isfile(cached):
+        log.ok("Using cached engine: {}".format(cached))
+        cmd.append("--loadEngine={}".format(cached))
     else:
-        cmd.append("--onnx={}".format(model_path))
+        log.wait("Building {} engine from ONNX...".format(precision.upper()))
+        cmd.append("--onnx={}".format(model))
+        if save_engine:
+            cmd.append("--saveEngine={}".format(cached))
 
-    if precision == "fp16":
-        cmd.append("--fp16")
-    elif precision == "int8":
-        cmd.append("--int8")
+    if precision == "fp16": cmd.append("--fp16")
+    elif precision == "int8": cmd.append("--int8")
 
-    if save_engine:
-        cmd.append("--saveEngine={}".format(save_engine))
+    log.info("Running: {}".format(" ".join(cmd)))
 
-    log.info("Running [{}]: {}".format(precision.upper(), " ".join(cmd)))
-    print("")
-
+    # Stream output
     captured = []
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             universal_newlines=True, bufsize=1)
     for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        captured.append(line)
+        sys.stdout.write(line); sys.stdout.flush(); captured.append(line)
     proc.wait()
-    return "".join(captured)
+    output = "".join(captured)
 
-
-def parse_output(output):
-    """Parse trtexec timing output into stats dict."""
+    # Parse
     stats = {}
-    patterns = {
-        "min_ms": r"min\s*[:=]\s*([\d.]+)\s*ms",
-        "max_ms": r"max\s*[:=]\s*([\d.]+)\s*ms",
-        "avg_ms": r"mean\s*[:=]\s*([\d.]+)\s*ms",
-        "median_ms": r"median\s*[:=]\s*([\d.]+)\s*ms",
-        "p99_ms": r"percentile\(99%\)\s*[:=]\s*([\d.]+)\s*ms",
-    }
+    patterns = {"min_ms": r"min\s*[:=]\s*([\d.]+)\s*ms", "max_ms": r"max\s*[:=]\s*([\d.]+)\s*ms",
+                "avg_ms": r"mean\s*[:=]\s*([\d.]+)\s*ms", "median_ms": r"median\s*[:=]\s*([\d.]+)\s*ms",
+                "p99_ms": r"percentile\(99%\)\s*[:=]\s*([\d.]+)\s*ms"}
 
-    search_text = output
-    for block_name in ["GPU Compute", "Host Latency", "Total Host"]:
-        block, in_block = "", False
+    search = output
+    for bn in ["GPU Compute", "Host Latency"]:
+        block, inside = "", False
         for line in output.split("\n"):
-            if block_name in line:
-                in_block = True
-            if in_block:
+            if bn in line: inside = True
+            if inside:
                 block += line + "\n"
                 if ("percentile" in line.lower() or not line.strip()) and block.count("\n") > 1:
-                    in_block = False
-        if block:
-            search_text = block
-            break
+                    inside = False
+        if block: search = block; break
 
-    for key, pattern in patterns.items():
-        match = re.search(pattern, search_text, re.IGNORECASE)
-        if match:
-            stats[key] = round(float(match.group(1)), 3)
+    for key, pat in patterns.items():
+        m = re.search(pat, search, re.IGNORECASE)
+        if m: stats[key] = round(float(m.group(1)), 3)
 
-    match = re.search(r"Throughput:\s*([\d.]+)\s*qps", output, re.IGNORECASE)
-    if match:
-        stats["fps"] = round(float(match.group(1)), 2)
+    m = re.search(r"Throughput:\s*([\d.]+)\s*qps", output, re.IGNORECASE)
+    if m: stats["fps"] = round(float(m.group(1)), 2)
     elif "avg_ms" in stats and stats["avg_ms"] > 0:
         stats["fps"] = round(1000.0 / stats["avg_ms"], 2)
 
-    return stats
+    if not stats:
+        log.error("Could not parse output for {}".format(precision.upper())); sys.exit(1)
 
+    log.header("RESULTS [{}]".format(precision.upper()))
+    for l, k, u in [("Avg", "avg_ms", "ms"), ("Min", "min_ms", "ms"), ("Max", "max_ms", "ms"),
+                     ("Median", "median_ms", "ms"), ("P99", "p99_ms", "ms"), ("FPS", "fps", "")]:
+        log.metric(l, stats.get(k, "N/A"), u)
 
-def print_results(stats, precision, model_path):
-    """Print single precision results."""
-    log.header("TRTEXEC RESULTS [{}]".format(precision.upper()))
-    for label, key, unit in [("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
-                              ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
-                              ("P99", "p99_ms", "ms"), ("FPS", "fps", "")]:
-        log.metric(label, stats.get(key, "N/A"), unit)
+    print("RESULT_JSON:{}".format(json.dumps({"precision": precision.upper(), "stats": stats})))
 
 
 def print_comparison(all_results, model_path, iterations):
-    """Print final comparison table with model info."""
+    """Print final comparison table with method info."""
     model_name = os.path.basename(model_path).replace(".onnx", "").replace(".engine", "")
+    n = len(all_results)
     log.header("FINAL COMPARISON — {} ({} iters)".format(model_name.upper(), iterations))
+    log.info("Method: {} (🟢)".format(METHOD))
 
-    hdr = "  {:<16}".format("Metric")
-    for prec, _ in all_results:
-        hdr += " {:>14}".format(log.c(prec, log.BOLD + log.CYAN))
-    print(hdr)
-    log.divider()
-
+    log.table_header("Metric", [prec for prec, _ in all_results])
+    log.divider(n)
     for label, key, unit in [("Avg latency", "avg_ms", "ms"), ("Min latency", "min_ms", "ms"),
                               ("Max latency", "max_ms", "ms"), ("Median", "median_ms", "ms"),
                               ("P99", "p99_ms", "ms")]:
-        row = "  {:<16}".format(label)
-        for _, s in all_results:
-            v = s.get(key, "N/A")
-            row += " {:>14}".format("{} {}".format(v, unit) if v != "N/A" else "N/A")
-        print(row)
-    log.divider()
-
-    row = "  {:<16}".format(log.c("FPS", log.BOLD))
-    for _, s in all_results:
-        row += " {:>14}".format(log.c(str(s.get("fps", "N/A")), log.BOLD + log.GREEN))
-    print(row)
+        log.table_metric(label, [s.get(key, "N/A") for _, s in all_results], unit)
+    log.divider(n)
+    log.table_fps([s.get("fps", "N/A") for _, s in all_results])
 
     base_prec, base = all_results[0]
-    if len(all_results) > 1 and "avg_ms" in base:
+    if n > 1 and "avg_ms" in base:
         print("")
         for prec, s in all_results[1:]:
             if "avg_ms" in s and s["avg_ms"] > 0:
                 sp = round(base["avg_ms"] / s["avg_ms"], 2)
-                fps_sp = round(s["fps"] / base["fps"], 2) if base.get("fps", 0) > 0 else 0
-                log.speed("{} vs {}: {}x latency | {}x FPS".format(prec, base_prec, sp, fps_sp))
+                fp = round(s["fps"] / base["fps"], 2) if base.get("fps", 0) > 0 else 0
+                log.speed("{} vs {}: {}x latency | {}x FPS".format(prec, base_prec, sp, fp))
 
 
 def main():
     p = argparse.ArgumentParser(description="trtexec benchmark (FP32/FP16/INT8)")
-    p.add_argument("model", help="Path to ONNX model or .engine file")
+    p.add_argument("model", help="ONNX model or .engine file")
     p.add_argument("-p", "--precision", nargs="+", default=["fp16"],
                    choices=["fp32", "fp16", "int8"])
     p.add_argument("-n", "--iterations", type=int, default=100)
     p.add_argument("-w", "--warmup", type=int, default=10)
     p.add_argument("--save-engine", action="store_true")
     p.add_argument("--csv", action="store_true", default=False)
+    p.add_argument("--_single", help=argparse.SUPPRESS)
     args = p.parse_args()
 
-    log.header("TRTEXEC BENCHMARK")
+    if args._single:
+        _run_single(args.model, args._single, args.iterations, args.warmup, args.save_engine)
+        return
+
+    log.header("TRTEXEC BENCHMARK (🟢 Method 1)")
     log.metric("Model", args.model)
     log.metric("Precisions", ", ".join(pr.upper() for pr in args.precision))
-    log.metric("Iterations", args.iterations)
-    log.metric("Warmup", args.warmup)
+    log.info("Each precision runs in separate process (clean GPU memory)")
 
     all_results = []
-    base_name = os.path.splitext(args.model)[0]
-
+    script = os.path.abspath(__file__)
     for prec in args.precision:
-        log.step("{} precision".format(prec.upper()))
-        cached = "{}-{}.engine".format(base_name, prec)
-        if os.path.isfile(cached):
-            log.ok("Using cached engine: {}".format(cached))
-            model_input, save_path = cached, None
-        else:
-            log.wait("Building {} engine from ONNX...".format(prec.upper()))
-            model_input = args.model
-            save_path = cached if args.save_engine else None
+        log.step("{} — spawning subprocess".format(prec.upper()))
+        cmd = [sys.executable, script, args.model, "--_single", prec,
+               "-n", str(args.iterations), "-w", str(args.warmup)]
+        if args.save_engine: cmd.append("--save-engine")
 
-        output = run_trtexec(model_input, prec, args.iterations, args.warmup, save_path)
-        stats = parse_output(output)
-        if stats:
-            print_results(stats, prec, args.model)
-            all_results.append((prec.upper(), stats))
-            if args.csv:
-                keys = ["avg_ms", "min_ms", "max_ms", "median_ms", "p99_ms", "fps"]
-                print("CSV:{},{}".format(prec.upper(), ",".join(str(stats.get(k, "")) for k in keys)))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                universal_newlines=True, bufsize=1)
+        result_json = None
+        for line in proc.stdout:
+            sys.stdout.write(line); sys.stdout.flush()
+            if line.startswith("RESULT_JSON:"): result_json = line.strip()[12:]
+        proc.wait()
+
+        if result_json:
+            data = json.loads(result_json)
+            all_results.append((data["precision"], data["stats"]))
         else:
-            log.warn("Failed to parse {} results.".format(prec.upper()))
+            log.warn("{} failed (exit {})".format(prec.upper(), proc.returncode))
+        print("")
 
     if len(all_results) > 1:
         print_comparison(all_results, args.model, args.iterations)

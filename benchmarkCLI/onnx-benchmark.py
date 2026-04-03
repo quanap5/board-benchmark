@@ -137,7 +137,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    print(f"\n  ONNX MODEL BENCHMARK")
+    print(f"\n  ONNX MODEL BENCHMARK (🔵 Method 3: onnxruntime)")
     print(f"  Model: {args.model} | Provider: {args.provider}")
     print(f"  Iters: {args.iterations} | Warmup: {args.warmup} | Batch: {args.batch_size}")
 

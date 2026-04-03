@@ -96,7 +96,7 @@ echo ""
 TRTEXEC_CSV=""
 if [ "$MODE" = "trtexec" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_TRTEXEC" = true ]; then
-        _hdr "📊" "TRTEXEC BENCHMARK (FP32/FP16/INT8)"
+        _hdr "🟢" "METHOD 1: TRTEXEC BENCHMARK (FP32/FP16/INT8)"
         PREC_ARGS="-p fp16"
         [ -n "$TRT_PYTHON_PRECISIONS" ] && PREC_ARGS="-p $TRT_PYTHON_PRECISIONS"
         TRT_TMPFILE=$(mktemp /tmp/trt-bench.XXXXXX)
@@ -113,7 +113,7 @@ fi
 # --- TRT Python benchmark (FP32/FP16/INT8) ---
 if [ "$MODE" = "trt-python" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_TRT_PYTHON" = true ]; then
-        _hdr "🐍" "TRT PYTHON BENCHMARK (FP32/FP16/INT8)"
+        _hdr "🟣" "METHOD 2: TRT PYTHON BENCHMARK (FP32/FP16/INT8)"
         PREC_ARGS=""
         [ -n "$TRT_PYTHON_PRECISIONS" ] && PREC_ARGS="-p $TRT_PYTHON_PRECISIONS"
         python3 "$SCRIPT_DIR/trt-python-benchmark.py" \
@@ -129,7 +129,7 @@ fi
 ORT_CSV=""
 if [ "$MODE" = "ort" ] || [ "$MODE" = "all" ]; then
     if [ "$HAS_ORT" = true ]; then
-        _hdr "📊" "ONNXRUNTIME BENCHMARK (TensorRT EP -> CUDA EP -> CPU)"
+        _hdr "🔵" "METHOD 3: ONNXRUNTIME BENCHMARK (TRT EP -> CUDA EP -> CPU)"
         ORT_TMPFILE=$(mktemp /tmp/ort-bench.XXXXXX)
         python3 "$SCRIPT_DIR/onnx-benchmark.py" \
             "$ONNX_FILE" -p tensorrt -n "$ITERATIONS" -w "$WARMUP" -b "$BATCH_SIZE" --csv 2>&1 | tee "$ORT_TMPFILE"

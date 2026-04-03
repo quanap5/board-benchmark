@@ -83,13 +83,39 @@ def metric(label, value, unit=""):
     print("  {:<20} {}".format(label, c(val_str, BOLD)))
 
 
-def table_row(label, *values):
-    """Print a table row with multiple columns."""
+COL_W = 14  # column width for comparison tables
+
+
+def rpad(text, width=COL_W, color=None):
+    """Right-align text, then apply color. Keeps alignment correct."""
+    padded = "{:>{}}".format(text, width)
+    return c(padded, color) if color else padded
+
+
+def table_header(label, columns):
+    """Print table header row with colored column names."""
     row = "  {:<16}".format(label)
-    for v in values:
-        row += " {:>14}".format(c(str(v), BOLD))
+    for col in columns:
+        row += " " + rpad(col, COL_W, BOLD + CYAN)
     print(row)
 
 
-def divider():
-    print(c("  " + "-" * 54, DIM))
+def table_metric(label, values, unit=""):
+    """Print table metric row aligned with header."""
+    row = "  {:<16}".format(label)
+    for v in values:
+        text = "{} {}".format(v, unit) if unit and v != "N/A" else str(v)
+        row += " " + rpad(text)
+    print(row)
+
+
+def table_fps(values):
+    """Print FPS row with green bold highlight."""
+    row = "  {:<16}".format(c("FPS", BOLD))
+    for v in values:
+        row += " " + rpad(str(v), COL_W, BOLD + GREEN)
+    print(row)
+
+
+def divider(cols=3):
+    print(c("  " + "-" * (16 + (COL_W + 1) * cols), DIM))
