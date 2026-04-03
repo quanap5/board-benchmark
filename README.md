@@ -105,7 +105,7 @@ bash benchmarkCLI/setup-jetson.sh
 # trtexec with FP32/FP16/INT8 comparison
 bash benchmarkCLI/run-benchmark-jetson.sh --model yolov8m --trtexec-only -p fp32 fp16 int8 -n 100
 
-# TRT Python API (needs pycuda)
+# TRT Python API (no extra install)
 bash benchmarkCLI/run-benchmark-jetson.sh --model yolov8m --trt-python -p fp16 int8 -n 100
 
 # Default (auto-detect method, yolov8n)
@@ -116,12 +116,32 @@ bash benchmarkCLI/run-benchmark-jetson.sh
 
 ## Example Output
 
-### GPU vs CPU comparison
+### Jetson: FP32 vs FP16 vs INT8 (trtexec or TRT Python)
 
 ```
-========================================================
-  BENCHMARK SUMMARY
-========================================================
+==========================================================
+  🏁 FINAL COMPARISON — YOLOV8N (100 iters)
+==========================================================
+  Metric                    FP32           FP16           INT8
+  ------------------------------------------------------
+  Avg latency          38.432 ms      21.534 ms      14.234 ms
+  Min latency          37.891 ms      20.763 ms      13.891 ms
+  Max latency          39.210 ms      22.012 ms      14.887 ms
+  Median               38.156 ms      21.213 ms      14.105 ms
+  P99                  39.887 ms      22.012 ms      14.887 ms
+  ------------------------------------------------------
+  FPS                      26.02          45.48          70.25
+
+  🚀 PERF FP16 vs FP32: 1.78x latency | 1.75x FPS
+  🚀 PERF INT8 vs FP32: 2.70x latency | 2.70x FPS
+```
+
+### Desktop: GPU vs CPU (Docker)
+
+```
+==========================================================
+  🏁 BENCHMARK SUMMARY
+==========================================================
   Model: yolov8n | Iters: 100 | Batch: 1
 
   Metric             GPU (TensorRT)          CPU
@@ -132,8 +152,6 @@ bash benchmarkCLI/run-benchmark-jetson.sh
   P95                    1.002 ms    27.857 ms
   P99                    1.105 ms     28.73 ms
   FPS                      1231.5        41.07  29.98x
-
-  Speedup: 29.98x (latency) | 29.98x (FPS)
 ```
 
 ## CLI Options
@@ -156,7 +174,7 @@ bash benchmarkCLI/run-benchmark-jetson.sh
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--trtexec-only` | off | trtexec CLI benchmark |
-| `--trt-python` | off | TRT Python API benchmark (needs pycuda) |
+| `--trt-python` | off | TRT Python API benchmark (no extra install) |
 | `--ort-only` | off | onnxruntime benchmark |
 | `--all` | off | Run all available methods |
 | `-p PREC [PREC...]` | `fp16` | Precision(s): `fp32`, `fp16`, `int8` |
